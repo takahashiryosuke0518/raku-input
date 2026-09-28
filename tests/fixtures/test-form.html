@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>らくらくにゅうりょくん！ 動作確認フォーム</title>
+    <style>
+      body {
+        max-width: 720px;
+        margin: 40px auto;
+        padding: 0 20px;
+        color: #26334a;
+        font-family: system-ui, sans-serif;
+      }
+
+      form {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 12px;
+        padding: 24px;
+        border: 1px solid #cad5e5;
+        border-radius: 12px;
+      }
+
+      input,
+      button {
+        padding: 9px;
+        font: inherit;
+      }
+
+      button {
+        grid-column: 2;
+      }
+
+      #submitWarning {
+        color: #b42318;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>動作確認フォーム</h1>
+    <p>拡張機能から入力後、未対応欄が空のままか確認してください。</p>
+
+    <form id="testForm">
+      <label for="familyNameJa">姓</label>
+      <input id="familyNameJa" name="family_name_ja" type="text">
+
+      <label for="givenNameJa">名</label>
+      <input id="givenNameJa" name="given_name_ja" type="text">
+
+      <label for="familyNameEn">Last Name</label>
+      <input id="familyNameEn" name="last_name" type="text" autocomplete="family-name">
+
+      <label for="givenNameEn">First Name</label>
+      <input id="givenNameEn" name="first_name" type="text" autocomplete="given-name">
+
+      <label for="email">メール</label>
+      <input id="email" name="email" type="email">
+
+      <label for="address">住所</label>
+      <input id="address" name="address" type="text">
+
+      <label for="company">会社名</label>
+      <input id="company" name="company" type="text">
+
+      <label for="fullName">氏名（1欄）</label>
+      <input id="fullName" name="full_name" type="text">
+
+      <button type="submit">手動送信テスト</button>
+    </form>
+
+    <p id="submitWarning" hidden>フォームのsubmitイベントが発生しました。</p>
+
+    <script>
+      document.getElementById('testForm').addEventListener('submit', (event) => {
+        event.preventDefault();
+        document.getElementById('submitWarning').hidden = false;
+      });
+    </script>
+  </body>
+</html>

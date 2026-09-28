@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "らくらくにゅうりょくん！",
+  "version": "0.1.0",
+  "description": "保存した氏名を、ボタン操作で現在のWebフォームへ入力します。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_title": "らくらくにゅうりょくん！",
+    "default_popup": "popup.html"
+  }
+}
