@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja">
+  <head><meta charset="utf-8"><title>Standard Academic Form Fixture</title></head>
+  <body>
+    <form>
+      <label>課程
+        <select name="academicCourse">
+          <option value="1">学部</option>
+          <option value="2">修士</option>
+          <option value="3">博士</option>
+        </select>
+      </label>
+      <label>学年
+        <select name="grade">
+          <option value="m1">修士1年</option>
+          <option value="m2">修士2年</option>
+        </select>
+      </label>
+      <label for="university">大学名</label>
+      <input id="university" type="text" name="university">
+      <label>大学名
+        <select name="universityChoice">
+          <option value="u-a">秋田県立大学</option>
+          <option value="u-b">東北大学</option>
+        </select>
+      </label>
+      <label for="graduateSchoolText">研究科</label>
+      <input id="graduateSchoolText" type="text" name="graduateSchoolText">
+      <label>研究科
+        <select name="graduateSchool">
+          <option value="gs-a">システム科学技術研究科</option>
+          <option value="gs-b">工学研究科</option>
+        </select>
+      </label>
+      <label for="majorText">専攻・コース</label>
+      <input id="majorText" type="text" name="majorText">
+      <label>専攻
+        <select name="major">
+          <option value="major-a">総合システム工学専攻</option>
+          <option value="major-b">情報工学専攻</option>
+        </select>
+      </label>
+      <label for="enrollmentMonth">入学年月</label>
+      <input id="enrollmentMonth" type="month" name="admissionMonth">
+      <label for="graduationMonth">卒業予定年月</label>
+      <input id="graduationMonth" type="month" name="graduationMonth">
+      <label for="laboratory">所属研究室</label>
+      <input id="laboratory" type="text" name="laboratory">
+      <label for="laboratoryStart">研究室所属開始年月</label>
+      <input id="laboratoryStart" type="month" name="laboratoryStartMonth">
+      <label for="laboratoryEnd">研究室所属終了予定年月</label>
+      <input id="laboratoryEnd" type="month" name="laboratoryEndMonth">
+      <label for="researchKeywords">研究キーワード</label>
+      <input id="researchKeywords" type="text" name="researchKeywords">
+      <label for="researchOverview">研究概要</label>
+      <textarea id="researchOverview" name="researchOverview"></textarea>
+      <button type="submit">送信</button>
+    </form>
+  </body>
+</html>

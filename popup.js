@@ -39,6 +39,22 @@
     'givenName',
     'familyNameLatin',
     'givenNameLatin',
+    'birthDate',
+    'gender',
+    'currentPrefecture',
+    'homePrefecture',
+    'academicCourse',
+    'grade',
+    'schoolName',
+    'departmentName',
+    'majorName',
+    'enrollmentMonth',
+    'graduationMonth',
+    'laboratoryName',
+    'laboratoryStartMonth',
+    'laboratoryEndMonth',
+    'researchKeywords',
+    'researchOverview',
   ];
 
   function createPopupController({ document, storageApi, tabsApi, scriptingApi }) {
@@ -53,12 +69,19 @@
     }
 
     function readForm() {
-      return Object.fromEntries(PROFILE_KEYS.map((key) => [key, fields[key].value]));
+      return Object.fromEntries(PROFILE_KEYS.map((key) => [
+        key,
+        key === 'researchKeywords'
+          ? fields[key].value.split(/[\n,、]/).map((value) => value.trim()).filter(Boolean)
+          : fields[key].value,
+      ]));
     }
 
     function writeForm(profile) {
       for (const key of PROFILE_KEYS) {
-        fields[key].value = profile[key] || '';
+        fields[key].value = key === 'researchKeywords'
+          ? (Array.isArray(profile[key]) ? profile[key].join('\n') : '')
+          : (profile[key] || '');
       }
     }
 
@@ -114,7 +137,9 @@
         return;
       }
 
-      if (!PROFILE_KEYS.some((key) => Boolean(profile[key]))) {
+      if (!PROFILE_KEYS.some((key) => (
+        Array.isArray(profile[key]) ? profile[key].length > 0 : Boolean(profile[key])
+      ))) {
         setStatus('先にプロフィールを保存してください。', 'warning');
         return;
       }

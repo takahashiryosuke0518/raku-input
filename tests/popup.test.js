@@ -8,13 +8,52 @@ const PROFILE_KEYS = [
   'givenName',
   'familyNameLatin',
   'givenNameLatin',
+  'birthDate',
+  'gender',
+  'currentPrefecture',
+  'homePrefecture',
+  'academicCourse',
+  'grade',
+  'schoolName',
+  'departmentName',
+  'majorName',
+  'enrollmentMonth',
+  'graduationMonth',
+  'laboratoryName',
+  'laboratoryStartMonth',
+  'laboratoryEndMonth',
+  'researchKeywords',
+  'researchOverview',
 ];
+
+const SAVED_PROFILE = {
+  familyName: '保存姓',
+  givenName: '保存名',
+  familyNameLatin: 'FAMILY',
+  givenNameLatin: 'GIVEN',
+  birthDate: '2002-05-18',
+  gender: '男性',
+  currentPrefecture: '秋田県',
+  homePrefecture: '宮城県',
+  academicCourse: '修士',
+  grade: '修士1年',
+  schoolName: '秋田県立大学',
+  departmentName: 'システム科学技術研究科',
+  majorName: '総合システム工学専攻',
+  enrollmentMonth: '2026-04',
+  graduationMonth: '2028-03',
+  laboratoryName: '○○研究室',
+  laboratoryStartMonth: '2026-04',
+  laboratoryEndMonth: '2028-03',
+  researchKeywords: ['医療画像処理', '深層学習', 'PET'],
+  researchOverview: '研究内容...',
+};
 
 function createFakeDocument(values = {}) {
   const elements = Object.fromEntries([
     ...PROFILE_KEYS.map((id) => [id, {
       id,
-      value: values[id] || '',
+      value: Array.isArray(values[id]) ? values[id].join('\n') : (values[id] || ''),
       disabled: false,
       addEventListener() {},
     }]),
@@ -33,12 +72,7 @@ function createFakeDocument(values = {}) {
 
 function createHarness(options = {}) {
   const document = createFakeDocument(options.values);
-  const savedProfile = options.profile || {
-    familyName: '保存姓',
-    givenName: '保存名',
-    familyNameLatin: 'FAMILY',
-    givenNameLatin: 'GIVEN',
-  };
+  const savedProfile = options.profile || SAVED_PROFILE;
   const storageApi = {
     loadCalls: 0,
     saveCalls: [],
@@ -51,7 +85,12 @@ function createHarness(options = {}) {
       this.saveCalls.push(profile);
       if (options.saveError) throw options.saveError;
       return Object.fromEntries(
-        PROFILE_KEYS.map((key) => [key, String(profile[key] || '').trim()]),
+        PROFILE_KEYS.map((key) => [
+          key,
+          key === 'researchKeywords'
+            ? profile[key].map((value) => value.trim()).filter(Boolean)
+            : String(profile[key] || '').trim(),
+        ]),
       );
     },
   };
@@ -83,18 +122,18 @@ function createHarness(options = {}) {
   return { document, storageApi, tabsApi, scriptingApi, controller };
 }
 
-test('init restores all four saved values into the popup', async () => {
+test('init restores all saved values into the popup', async () => {
   const harness = createHarness();
 
   await harness.controller.init();
 
   for (const key of PROFILE_KEYS) {
-    assert.equal(harness.document.elements[key].value, harness.storageApi.loadCalls && {
-      familyName: '保存姓',
-      givenName: '保存名',
-      familyNameLatin: 'FAMILY',
-      givenNameLatin: 'GIVEN',
-    }[key]);
+    assert.equal(
+      harness.document.elements[key].value,
+      harness.storageApi.loadCalls && (
+        key === 'researchKeywords' ? SAVED_PROFILE[key].join('\n') : SAVED_PROFILE[key]
+      ),
+    );
   }
   assert.equal(harness.document.elements.status.textContent, '');
 });
@@ -118,13 +157,29 @@ test('init and fillCurrentPage report profile load failure safely', async () => 
   assert.equal(fillHarness.document.elements.status.textContent.includes(failure.message), false);
 });
 
-test('saveProfile stores four fields, reapplies normalized values, and reports success', async () => {
+test('saveProfile stores all fields, reapplies normalized values, and reports success', async () => {
   const harness = createHarness({
     values: {
       familyName: '  姓の値 ',
       givenName: ' 名の値  ',
       familyNameLatin: ' FAMILY ',
       givenNameLatin: ' GIVEN ',
+      birthDate: ' 2002-05-18 ',
+      gender: ' 男性 ',
+      currentPrefecture: ' 秋田県 ',
+      homePrefecture: ' 宮城県 ',
+      academicCourse: ' 修士 ',
+      grade: ' 修士1年 ',
+      schoolName: ' 秋田県立大学 ',
+      departmentName: ' システム科学技術研究科 ',
+      majorName: ' 総合システム工学専攻 ',
+      enrollmentMonth: ' 2026-04 ',
+      graduationMonth: ' 2028-03 ',
+      laboratoryName: ' ○○研究室 ',
+      laboratoryStartMonth: ' 2026-04 ',
+      laboratoryEndMonth: ' 2028-03 ',
+      researchKeywords: '医療画像処理\n深層学習\nPET',
+      researchOverview: ' 研究内容... ',
     },
   });
 
@@ -135,8 +190,28 @@ test('saveProfile stores four fields, reapplies normalized values, and reports s
     givenName: ' 名の値  ',
     familyNameLatin: ' FAMILY ',
     givenNameLatin: ' GIVEN ',
+    birthDate: ' 2002-05-18 ',
+    gender: ' 男性 ',
+    currentPrefecture: ' 秋田県 ',
+    homePrefecture: ' 宮城県 ',
+    academicCourse: ' 修士 ',
+    grade: ' 修士1年 ',
+    schoolName: ' 秋田県立大学 ',
+    departmentName: ' システム科学技術研究科 ',
+    majorName: ' 総合システム工学専攻 ',
+    enrollmentMonth: ' 2026-04 ',
+    graduationMonth: ' 2028-03 ',
+    laboratoryName: ' ○○研究室 ',
+    laboratoryStartMonth: ' 2026-04 ',
+    laboratoryEndMonth: ' 2028-03 ',
+    researchKeywords: ['医療画像処理', '深層学習', 'PET'],
+    researchOverview: ' 研究内容... ',
   }]);
   assert.equal(harness.document.elements.familyName.value, '姓の値');
+  assert.equal(harness.document.elements.birthDate.value, '2002-05-18');
+  assert.equal(harness.document.elements.gender.value, '男性');
+  assert.equal(harness.document.elements.currentPrefecture.value, '秋田県');
+  assert.equal(harness.document.elements.homePrefecture.value, '宮城県');
   assert.equal(harness.document.elements.status.textContent, '保存しました。');
   assert.equal(harness.document.elements.status.dataset.kind, 'success');
 });

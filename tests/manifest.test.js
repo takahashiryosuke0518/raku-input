@@ -34,13 +34,29 @@ test('every local file referenced by the manifest exists', () => {
   }
 });
 
-test('popup contains the four fields, two actions, status region, and ordered local scripts', () => {
+test('popup contains all profile fields, sections, actions, status region, and ordered local scripts', () => {
   const popup = read('popup.html');
   const requiredIds = [
     'familyName',
     'givenName',
     'familyNameLatin',
     'givenNameLatin',
+    'birthDate',
+    'gender',
+    'currentPrefecture',
+    'homePrefecture',
+    'academicCourse',
+    'grade',
+    'schoolName',
+    'departmentName',
+    'majorName',
+    'enrollmentMonth',
+    'graduationMonth',
+    'laboratoryName',
+    'laboratoryStartMonth',
+    'laboratoryEndMonth',
+    'researchKeywords',
+    'researchOverview',
     'saveButton',
     'fillButton',
     'status',
@@ -48,6 +64,15 @@ test('popup contains the four fields, two actions, status region, and ordered lo
 
   for (const id of requiredIds) {
     assert.match(popup, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(popup, /id=["']birthDate["'][^>]*type=["']date["']/);
+  assert.match(popup, /<select[^>]+id=["']gender["']/);
+  assert.match(popup, /<select[^>]+id=["']currentPrefecture["']/);
+  assert.match(popup, /<select[^>]+id=["']homePrefecture["']/);
+  assert.match(popup, /<option[^>]+value=["']秋田県["'][^>]*>秋田県<\/option>/);
+  assert.match(popup, /<option[^>]+value=["']海外["'][^>]*>海外<\/option>/);
+  for (const section of ['基本情報', '所在地', '学校情報', '研究情報']) {
+    assert.ok(popup.includes(section), `missing section: ${section}`);
   }
   assert.match(popup, /id=["']status["'][^>]*aria-live=["']polite["']/);
   assert.match(popup, /<link[^>]+href=["']popup\.css["']/);

@@ -63,7 +63,9 @@ h1 {
   font-weight: 650;
 }
 
-.fields input {
+.fields input,
+.fields select,
+.fields textarea {
   width: 100%;
   min-width: 0;
   padding: 9px 10px;
@@ -75,9 +77,20 @@ h1 {
   outline: none;
 }
 
-.fields input:focus {
+.fields input:focus,
+.fields select:focus,
+.fields textarea:focus {
   border-color: #4c76c7;
   box-shadow: 0 0 0 3px rgb(76 118 199 / 16%);
+}
+
+.section-heading {
+  grid-column: 1 / -1;
+  margin: 12px 0 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e3eaf4;
+  color: #365f97;
+  font-size: 14px;
 }
 
 .actions {

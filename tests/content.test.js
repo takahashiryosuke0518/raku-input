@@ -66,3 +66,22 @@ test('runContent rejects when storage cannot be read', async () => {
     failure,
   );
 });
+
+test('runContent uses asynchronous autofill orchestration when the content script exposes it', async () => {
+  const expected = { filledCount: 3, failedCount: 0 };
+  let called = false;
+  const result = await runContent({
+    storageArea: { get: async () => ({ profile: { schoolName: '秋田県立大学' } }) },
+    document: { marker: 'page' },
+    autofill: {
+      fillDocument() { throw new Error('sync fallback should not run'); },
+      async fillDocumentAsync(document, profile) {
+        called = document.marker === 'page' && profile.schoolName === '秋田県立大学';
+        return expected;
+      },
+    },
+  });
+
+  assert.equal(called, true);
+  assert.deepEqual(result, expected);
+});

@@ -14,17 +14,42 @@
     'givenName',
     'familyNameLatin',
     'givenNameLatin',
+    'birthDate',
+    'gender',
+    'currentPrefecture',
+    'homePrefecture',
+    'academicCourse',
+    'grade',
+    'schoolName',
+    'departmentName',
+    'majorName',
+    'enrollmentMonth',
+    'graduationMonth',
+    'laboratoryName',
+    'laboratoryStartMonth',
+    'laboratoryEndMonth',
+    'researchKeywords',
+    'researchOverview',
   ]);
+
+  const STRING_KEYS = PROFILE_KEYS.filter((key) => key !== 'researchKeywords');
 
   function normalizeProfile(value) {
     const source = value && typeof value === 'object' ? value : {};
 
-    return Object.fromEntries(
-      PROFILE_KEYS.map((key) => [
+    const profile = Object.fromEntries(
+      STRING_KEYS.map((key) => [
         key,
         typeof source[key] === 'string' ? source[key].trim() : '',
       ]),
     );
+    profile.researchKeywords = Array.isArray(source.researchKeywords)
+      ? source.researchKeywords
+        .filter((keyword) => typeof keyword === 'string')
+        .map((keyword) => keyword.trim())
+        .filter(Boolean)
+      : [];
+    return profile;
   }
 
   function createProfileStorage(storageArea) {

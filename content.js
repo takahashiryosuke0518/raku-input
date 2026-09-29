@@ -20,7 +20,10 @@
       ? stored.profile
       : {};
 
-    return autofill.fillDocument(document, profile);
+    const fill = typeof autofill.fillDocumentAsync === 'function'
+      ? autofill.fillDocumentAsync
+      : autofill.fillDocument;
+    return fill.call(autofill, document, profile);
   }
 
   return { runContent };
