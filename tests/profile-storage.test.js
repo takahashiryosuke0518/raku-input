@@ -16,6 +16,9 @@ const EMPTY_PROFILE = {
   givenNameKana: '',
   phoneNumber: '',
   mobilePhone: '',
+  currentPostalCode: '',
+  currentAddress: '',
+  currentBuilding: '',
   email: '',
   birthDate: '',
   gender: '',
@@ -88,6 +91,9 @@ test('normalizeProfile keeps all profile fields, trims strings, and normalizes k
       givenNameKana: 'タロウ',
       phoneNumber: '000-0000-0000',
       mobilePhone: '000-0000-0000',
+      currentPostalCode: '',
+      currentAddress: '',
+      currentBuilding: '',
       email: 'example@example.com',
       birthDate: '2002-05-18',
       gender: '男性',
@@ -116,6 +122,9 @@ test('normalizeProfile keeps all profile fields, trims strings, and normalizes k
     'givenNameKana',
     'phoneNumber',
     'mobilePhone',
+    'currentPostalCode',
+    'currentAddress',
+    'currentBuilding',
     'email',
     'birthDate',
     'gender',
@@ -140,6 +149,19 @@ test('load returns an empty normalized profile when nothing is stored', async ()
   const storage = createProfileStorage(createFakeStorage());
 
   assert.deepEqual(await storage.load(), EMPTY_PROFILE);
+});
+
+test('normalizeProfile stores current postal code and address components', () => {
+  assert.deepEqual(normalizeProfile({
+    currentPostalCode: ' 1234567 ',
+    currentAddress: ' 東京都千代田区千代田1-1 ',
+    currentBuilding: ' ○○マンション101 ',
+  }), {
+    ...EMPTY_PROFILE,
+    currentPostalCode: '1234567',
+    currentAddress: '東京都千代田区千代田1-1',
+    currentBuilding: '○○マンション101',
+  });
 });
 
 test('load fills missing saved fields without leaking extra fields', async () => {
@@ -191,6 +213,9 @@ test('save stores one normalized profile object and returns it', async () => {
     givenNameKana: 'タロウ',
     phoneNumber: '000-0000-0000',
     mobilePhone: '000-0000-0000',
+    currentPostalCode: '',
+    currentAddress: '',
+    currentBuilding: '',
     email: 'example@example.com',
     familyNameLatin: 'FAMILY',
     givenNameLatin: 'GIVEN',

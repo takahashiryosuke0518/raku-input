@@ -70,6 +70,15 @@
 
         <h2 class="section-heading">所在地</h2>
 
+        <label for="currentPostalCode">郵便番号</label>
+        <input id="currentPostalCode" name="currentPostalCode" type="text" inputmode="numeric" autocomplete="postal-code">
+
+        <label for="currentAddress">市区郡・地名・番地</label>
+        <input id="currentAddress" name="currentAddress" type="text" autocomplete="address-line1">
+
+        <label for="currentBuilding">建物名・部屋番号</label>
+        <input id="currentBuilding" name="currentBuilding" type="text" autocomplete="address-line2">
+
         <label for="currentPrefecture">居住地</label>
         <select id="currentPrefecture" name="currentPrefecture">
           <option value="">未設定</option>

@@ -18,6 +18,9 @@
     'givenNameKana',
     'phoneNumber',
     'mobilePhone',
+    'currentPostalCode',
+    'currentAddress',
+    'currentBuilding',
     'email',
     'birthDate',
     'gender',
@@ -81,6 +84,7 @@
     const compactHint = hint.replace(/\s/g, '');
     return (
       /会社名|法人名|ユーザー名|ユーザ名/.test(compactHint)
+      || /休暇中|休暇連絡先|緊急連絡先/.test(compactHint)
       || /携帯アドレス|携帯メール|mobile email|mobile mail/.test(hint)
       || /(^| )(company|organization|username|user name)($| )/.test(hint)
       || (!allowAddress && /(^| )address($| )/.test(hint))
@@ -92,7 +96,8 @@
   }
 
   function allowsAddressHint(match) {
-    return isPrefectureMatch(match) || match === 'email';
+    return isPrefectureMatch(match)
+      || ['email', 'currentPostalCode', 'currentAddress', 'currentBuilding'].includes(match);
   }
 
   function createScores() {
@@ -122,6 +127,15 @@
         || /(^| )(phone number|telephone|phone)($| )/.test(hint)
         || hint === 'tel') {
         score('phoneNumber', 250);
+      }
+      if (/郵便番号|postal code|postcode|zip code/.test(hint)) {
+        score('currentPostalCode', 350);
+      }
+      if (/建物名|マンション名|アパート名|部屋番号|号室|building|apartment|room number/.test(hint)) {
+        score('currentBuilding', 350);
+      } else if (/市区郡|市区町村|町名|地名|番地|住所|address line 1|street address/.test(hint)
+        && !/^(現住所|current address|residential address)$/.test(hint)) {
+        score('currentAddress', 300);
       }
       if (/メールアドレス|e mailアドレス|(^| )(e mail|email|mail)( |$)/.test(hint)) {
         score('email', 250);
@@ -169,7 +183,7 @@
       if (/現在の?居住地|居住地|現住所/.test(hint)
         || /(^| )(current prefecture|residence|residential area)($| )/.test(hint)) {
         score('currentPrefecture', 300);
-      } else if (/(^| )prefecture($| )/.test(hint)) {
+      } else if (/(^| )prefecture($| )/.test(hint) || /都道府県/.test(hint)) {
         score('currentPrefecture');
       }
 
@@ -502,6 +516,97 @@
       return ancestor;
     }
     return null;
+  }
+
+  function isFillableAddressControl(control) {
+    const tagName = elementTagName(control);
+    if (tagName === 'select' || tagName === 'textarea') return true;
+    if (tagName !== 'input') return false;
+    const type = String(control.getAttribute('type') || control.type || 'text').toLowerCase();
+    return ['text', 'date', 'month', 'email', 'tel'].includes(type);
+  }
+
+  function addressContextHints(control, document, metadata) {
+    const hints = [
+      ...(metadata && Array.isArray(metadata.contextTexts) ? metadata.contextTexts : []),
+      ...(metadata && Array.isArray(metadata.fieldsetTexts) ? metadata.fieldsetTexts : []),
+    ];
+    let ancestor = control && control.parentElement;
+    for (let depth = 0; ancestor && depth < 12; depth += 1, ancestor = ancestor.parentElement) {
+      const tagName = elementTagName(ancestor);
+      const roleGroup = ancestor.getAttribute && ancestor.getAttribute('role') === 'group';
+      if (!['section', 'article', 'fieldset'].includes(tagName) && !roleGroup) continue;
+      const ariaLabel = ancestor.getAttribute && ancestor.getAttribute('aria-label');
+      if (ariaLabel) hints.push(ariaLabel);
+      const labelledBy = String(ancestor.getAttribute && ancestor.getAttribute('aria-labelledby') || '')
+        .split(/\s+/).filter(Boolean);
+      for (const id of labelledBy) {
+        const label = document && document.getElementById && document.getElementById(id);
+        if (label && label.textContent) hints.push(label.textContent);
+      }
+      if (tagName === 'fieldset') {
+        const legend = queryElements(ancestor, 'legend')[0];
+        if (legend && legend.textContent) hints.push(legend.textContent);
+      } else {
+        const headings = Array.from(ancestor.children || []).filter((child) => (
+          /^h[1-6]$/.test(elementTagName(child))
+        ));
+        if (headings.length === 1 && headings[0].textContent) hints.push(headings[0].textContent);
+      }
+    }
+    return normalizedHints(hints);
+  }
+
+  function addressSectionMarker(element) {
+    if (!element || queryElements(element, 'input, select, textarea').length > 0) return null;
+    const text = normalizeHint(element.textContent || '');
+    if (text === '現住所') {
+      return { kind: 'current' };
+    }
+    if (text === '休暇中の連絡先') {
+      return { kind: 'other' };
+    }
+    return null;
+  }
+
+  function addressSiblingRangeStatus(control) {
+    let branch = control;
+    for (let depth = 0; branch && depth < 14; depth += 1) {
+      const parent = branch.parentElement;
+      if (!parent || !parent.children) break;
+      const siblings = Array.from(parent.children);
+      const branchIndex = siblings.indexOf(branch);
+      if (branchIndex < 0) break;
+      const markers = siblings.map((element, index) => ({ index, ...addressSectionMarker(element) }))
+        .filter((marker) => marker.kind);
+      if (markers.length) {
+        const currentMarkers = markers.filter((marker) => marker.kind === 'current');
+        if (currentMarkers.length > 1) return 'ambiguous';
+        if (currentMarkers.length !== 1) return 'outside';
+        const currentMarker = currentMarkers[0];
+        if (branchIndex <= currentMarker.index) return 'outside';
+        const precedingMarker = markers.filter((marker) => marker.index < branchIndex).at(-1);
+        return precedingMarker && precedingMarker.index === currentMarker.index
+          ? 'current'
+          : 'outside';
+      }
+      branch = parent;
+    }
+    return 'unmarked';
+  }
+
+  function addressScopeSkipReason(control, document, metadata) {
+    if (addressContextHints(control, document, metadata).some((hint) => (
+      /休暇中|休暇連絡先|緊急連絡先|vacation|emergency|temporary address/.test(hint)
+    ))) return 'non-current-address-context';
+    const rangeStatus = addressSiblingRangeStatus(control);
+    if (rangeStatus === 'ambiguous') return 'ambiguous-section-boundary';
+    if (rangeStatus === 'outside') return 'outside-current-address-range';
+    return null;
+  }
+
+  function isExcludedAddressContext(control, document, metadata) {
+    return Boolean(addressScopeSkipReason(control, document, metadata));
   }
 
   function getSelectUnitSegments(definition, selects) {
@@ -1078,6 +1183,84 @@
     return '';
   }
 
+  function fillSplitPostalGroups(document, profile, options = {}) {
+    const skipProfileKeys = new Set(options.skipProfileKeys || []);
+    const onlyProfileKeys = options.onlyProfileKeys ? new Set(options.onlyProfileKeys) : null;
+    const onlyControls = options.onlyControls ? new Set(options.onlyControls) : null;
+    const skipControls = options.skipControls ? new Set(options.skipControls) : null;
+    const candidates = [];
+    const sameControls = (left, right) => left.length === right.length
+      && left.every((control, index) => control === right[index]);
+
+    for (const control of document.querySelectorAll('input, select, textarea')) {
+      if (elementTagName(control) !== 'input') continue;
+      const type = String(control.getAttribute('type') || control.type || 'text').toLowerCase();
+      if (!['text', 'tel'].includes(type)) continue;
+      const groups = [...ancestorContainers(control)];
+      const definition = getPairedDefinition(control);
+      if (definition && !groups.includes(definition)) groups.push(definition);
+      for (const group of groups) {
+        const controls = groupControls(group).filter((item) => (
+          ['text', 'tel'].includes(String(item.getAttribute('type') || item.type || 'text').toLowerCase())
+        ));
+        if (controls.length !== 2) continue;
+        let label = contactGroupLabel(group, controls, document);
+        if (!/郵便番号|postal code|postcode|zip code/i.test(label)) {
+          const definitions = controls.map((item) => getPairedDefinition(item));
+          const sharedDefinition = definitions[0]
+            && definitions.every((definition) => definition === definitions[0]);
+          if (sharedDefinition) label = getDefinitionHeading(controls[0]);
+        }
+        if (!/郵便番号|postal code|postcode|zip code/i.test(label)) continue;
+        const excludedReasons = controls.map((item) => addressScopeSkipReason(
+          item, document, collectFieldMetadata(item, document),
+        )).filter(Boolean);
+        if (excludedReasons.length) continue;
+        if (!candidates.some((candidate) => sameControls(candidate.controls, controls))) {
+          candidates.push({ controls, label });
+        }
+      }
+    }
+
+    const controls = new Set();
+    if (candidates.length !== 1) {
+      candidates.forEach(({ controls: candidateControls }) => {
+        candidateControls.forEach((control) => controls.add(control));
+      });
+      return { filledCount: 0, failedCount: 0, controls };
+    }
+    let filledCount = 0;
+    let failedCount = 0;
+    for (const candidate of candidates) {
+      const { controls: groupControlsList } = candidate;
+      groupControlsList.forEach((control) => controls.add(control));
+      if (skipProfileKeys.has('currentPostalCode')
+        || (onlyProfileKeys && !onlyProfileKeys.has('currentPostalCode'))
+        || (onlyControls && !groupControlsList.every((control) => onlyControls.has(control)))
+        || (skipControls && groupControlsList.some((control) => skipControls.has(control)))) continue;
+      const rawValue = profile && profile.currentPostalCode;
+      if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
+      const postal = rawValue.normalize('NFKC').replace(/[\s-]/g, '');
+      if (!/^\d{7}$/.test(postal)) continue;
+      for (const [index, control] of groupControlsList.entries()) {
+        if (control.disabled || control.readOnly
+          || (typeof control.matches === 'function' && control.matches(':disabled'))) break;
+        try {
+          if (!setFormControlValue(control, { profileKey: 'currentPostalCode', segment: index === 0 ? 'first3' : 'last4' },
+            index === 0 ? postal.slice(0, 3) : postal.slice(3), document)) {
+            failedCount += 1;
+            break;
+          }
+          filledCount += 1;
+        } catch (_error) {
+          failedCount += 1;
+          break;
+        }
+      }
+    }
+    return { filledCount, failedCount, controls };
+  }
+
   function fillSplitContactGroups(document, profile, options = {}) {
     const onlyProfileKeys = options.onlyProfileKeys ? new Set(options.onlyProfileKeys) : null;
     const skipProfileKeys = new Set(options.skipProfileKeys || []);
@@ -1169,7 +1352,7 @@
             break;
           }
           try {
-            if (!setFormControlValue(item, { profileKey: key, segment: null }, parts[index], document)) {
+            if (!setFormControlValue(item, { profileKey: key, segment: `part${index + 1}` }, parts[index], document)) {
               break;
             }
             filledCount += 1;
@@ -1185,8 +1368,9 @@
   function fillDocument(document, profile, options = {}) {
     const radioResult = fillGenderRadios(document, profile || {}, options);
     const contactResult = fillSplitContactGroups(document, profile || {}, options);
-    let filledCount = radioResult.filledCount + contactResult.filledCount;
-    let failedCount = 0;
+    const postalResult = fillSplitPostalGroups(document, profile || {}, options);
+    let filledCount = radioResult.filledCount + contactResult.filledCount + postalResult.filledCount;
+    let failedCount = postalResult.failedCount;
     const onlyProfileKeys = options.onlyProfileKeys
       ? new Set(options.onlyProfileKeys)
       : null;
@@ -1214,8 +1398,24 @@
       }
     }
 
+    const addressMatchCounts = new Map();
     for (const control of document.querySelectorAll('input, select, textarea')) {
-      if (radioResult.controls.has(control) || contactResult.controls.has(control)) continue;
+      const metadata = collectFieldMetadata(control, document);
+      const classification = classifyControl(metadata);
+      if (!classification || ![
+        'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
+      ].includes(classification.profileKey)) continue;
+      const scopeSkipReason = addressScopeSkipReason(control, document, metadata);
+      if (!isFillableAddressControl(control)
+        || scopeSkipReason) continue;
+      addressMatchCounts.set(
+        classification.profileKey,
+        (addressMatchCounts.get(classification.profileKey) || 0) + 1,
+      );
+    }
+    for (const control of document.querySelectorAll('input, select, textarea')) {
+      if (radioResult.controls.has(control) || contactResult.controls.has(control)
+        || postalResult.controls.has(control)) continue;
       if (onlyControls && !onlyControls.has(control)) continue;
       if (skipControls && skipControls.has(control)) continue;
       const tagName = String(control.tagName || '').toLowerCase();
@@ -1237,6 +1437,18 @@
         if (classification.profileKey === 'email' && !allowedEmailControls.has(control)) continue;
         if (skipProfileKeys.has(classification.profileKey)
           || (onlyProfileKeys && !onlyProfileKeys.has(classification.profileKey))) continue;
+        if ([
+          'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
+        ].includes(classification.profileKey)
+          && addressScopeSkipReason(control, document, metadata)) {
+          continue;
+        }
+        if ([
+          'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
+        ].includes(classification.profileKey)
+          && addressMatchCounts.get(classification.profileKey) !== 1) {
+          continue;
+        }
         const storedValue = profile && profile[classification.profileKey];
         const value = valueForControl(
           classification.profileKey,

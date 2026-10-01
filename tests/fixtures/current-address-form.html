@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+  <body>
+    <form>
+      <section aria-labelledby="current-address-heading">
+        <h2 id="current-address-heading">現住所</h2>
+        <div>
+          <label>郵便番号</label>
+          <input name="gyubin1" type="text">-
+          <input name="gyubin2" type="text">
+          <button type="button">住所検索</button>
+        </div>
+        <div><label for="prefecture">都道府県</label>
+          <select id="prefecture" name="gken"><option>秋田県</option></select>
+        </div>
+        <div><label for="address">市区郡・地名・番地</label>
+          <input id="address" name="gadrs1" type="text">
+        </div>
+        <div><label for="building">建物名・部屋番号</label>
+          <input id="building" name="gadrs2" type="text">
+        </div>
+      </section>
+      <section>
+        <h2>連絡先</h2>
+        <div><label>固定電話番号</label>
+          <input name="gtel1" type="text">-<input name="gtel2" type="text">-<input name="gtel3" type="text">
+        </div>
+        <div><label>携帯電話番号</label>
+          <input name="kttel1" type="text">-<input name="kttel2" type="text">-<input name="kttel3" type="text">
+        </div>
+      </section>
+      <section>
+        <h2>休暇中の連絡先</h2>
+        <label for="vacation-address">住所</label>
+        <input id="vacation-address" type="text">
+      </section>
+    </form>
+  </body>
+</html>

@@ -71,6 +71,10 @@ test('classifyField separates kana names and personal contact fields from other 
     [metadata({ autocomplete: 'tel' }), 'phoneNumber'],
     [metadata({ labelTexts: ['携帯電話'] }), 'mobilePhone'],
     [metadata({ labelTexts: ['携帯番号'] }), 'mobilePhone'],
+    [metadata({ labelTexts: ['郵便番号'] }), 'currentPostalCode'],
+    [metadata({ labelTexts: ['市区郡・地名・番地'] }), 'currentAddress'],
+    [metadata({ labelTexts: ['建物名・部屋番号'] }), 'currentBuilding'],
+    [metadata({ labelTexts: ['都道府県'] }), 'currentPrefecture'],
     [metadata({ labelTexts: ['E-mailアドレス'] }), 'email'],
     [metadata({ labelTexts: ['メールアドレス'] }), 'email'],
     [metadata({ labelTexts: ['携帯アドレス'] }), null],
@@ -80,6 +84,311 @@ test('classifyField separates kana names and personal contact fields from other 
   for (const [fieldMetadata, expected] of cases) {
     assert.equal(classifyField(fieldMetadata), expected, JSON.stringify(fieldMetadata));
   }
+});
+
+test('current address fields fill by labels and split postal group without clicking search controls', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures', 'current-address-form.html'), 'utf8');
+  for (const siteField of [
+    'gyubin1', 'gyubin2', 'gken', 'gadrs1', 'gadrs2',
+    'gtel1', 'gtel2', 'gtel3', 'kttel1', 'kttel2', 'kttel3',
+  ]) {
+    assert.match(html, new RegExp(`name="${siteField}"`));
+  }
+  assert.match(html, /休暇中の連絡先/);
+  assert.match(html, /住所検索/);
+  const postal1 = new FakeInput({ type: 'text', name: 'gyubin1' });
+  const postal2 = new FakeInput({ type: 'text', name: 'gyubin2' });
+  const postalLabel = new FakeLabel('郵便番号');
+  const postalGroup = new FakeContainer('div', {
+    controls: [postal1, postal2], labels: [postalLabel], textContent: '郵便番号 -',
+  });
+  const prefecture = new FakeSelect({ name: 'gken', id: 'prefecture' }, [
+    new FakeOption('', '選択してください'), new FakeOption('秋田県', '秋田県'),
+  ]);
+  const prefectureLabel = new FakeLabel('都道府県', 'prefecture');
+  const address = new FakeInput({ name: 'gadrs1', id: 'address' });
+  const building = new FakeInput({ name: 'gadrs2', id: 'building' });
+  const vacation = new FakeInput({ name: 'vacation-address', id: 'vacation' });
+  const search = { clicks: 0, click() { this.clicks += 1; } };
+  const labels = [
+    prefectureLabel,
+    new FakeLabel('市区郡・地名・番地', 'address'),
+    new FakeLabel('建物名・部屋番号', 'building'),
+    new FakeLabel('休暇中の連絡先住所', 'vacation'),
+  ];
+  const controls = [postal1, postal2, prefecture, address, building, vacation];
+  const document = new FakeDocument(controls, labels, [search]);
+  const currentAddressGroup = new FakeContainer('div', { controls: [prefecture, address, building, vacation] });
+  const addressDefinition = new FakeContainer('dd', { children: [currentAddressGroup] });
+  addressDefinition.controls = [prefecture, address, building, vacation];
+  new FakeContainer('div', {
+    children: [new FakeContainer('dt', { textContent: '現住所' }), addressDefinition],
+  });
+  // Labels and field grouping model the visible site structure; name attributes are only fixture locators.
+  prefecture.parentElement = currentAddressGroup;
+  address.parentElement = currentAddressGroup;
+  building.parentElement = currentAddressGroup;
+  vacation.parentElement = currentAddressGroup;
+  postal1.parentElement = postalGroup;
+  postal2.parentElement = postalGroup;
+  const result = fillDocument(document, {
+    currentPostalCode: '010-0001',
+    currentPrefecture: '秋田県',
+    currentAddress: '秋田市山王1-1',
+    currentBuilding: '県庁マンション101',
+  });
+
+  assert.equal(classifyControl(collectFieldMetadata(address, document))?.profileKey, 'currentAddress');
+
+  assert.deepEqual(
+    [result.filledCount, postal1.value, postal2.value, prefecture.value, address.value, building.value],
+    [5, '010', '0001', '秋田県', '秋田市山王1-1', '県庁マンション101'],
+  );
+  assert.deepEqual([postal1.value, postal2.value], ['010', '0001']);
+  assert.equal(prefecture.value, '秋田県');
+  assert.equal(address.value, '秋田市山王1-1');
+  assert.equal(building.value, '県庁マンション101');
+  assert.equal(vacation.value, '');
+  assert.equal(search.clicks, 0);
+});
+
+test('current address range uses sibling headings, syncs jqTransform, and excludes vacation fields', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures', 'current-address-dual-form.html'), 'utf8');
+  assert.match(html, /現住所/);
+  assert.match(html, /休暇中の連絡先/);
+  assert.match(html, /現住所と同じ場合はこちらにチェックしてください/);
+  assert.equal((html.match(/type="button"/g) || []).length, 4);
+
+  const controls = [];
+  const searchButtons = [];
+  const makeDefinition = (label, prefix) => {
+    const term = new FakeContainer('dt', { textContent: label });
+    let fields;
+    let result;
+    let child;
+    if (label === '郵便番号') {
+      const postal = [
+        new FakeInput({ type: 'text', id: `${prefix}-postal-1`, maxlength: '3' }),
+        new FakeInput({ type: 'text', id: `${prefix}-postal-2`, maxlength: '4' }),
+      ];
+      const searchInput = new FakeInput({ type: 'button', id: `${prefix}-search-input` });
+      const searchButton = { tagName: 'BUTTON', clicks: 0, click() { this.clicks += 1; } };
+      const hyphen = new FakeLabel('-');
+      const firstWrapper = new FakeContainer('span', { controls: [postal[0]], children: [postal[0]] });
+      const secondWrapper = new FakeContainer('span', { controls: [postal[1]], children: [postal[1]] });
+      firstWrapper.className = 'jqTransformInputWrapper';
+      secondWrapper.className = 'jqTransformInputWrapper';
+      const postalGroup = new FakeContainer('span', {
+        controls: postal, labels: [hyphen],
+        children: [firstWrapper, hyphen, secondWrapper, searchButton],
+      });
+      const secondarySearchGroup = new FakeContainer('span', {
+        controls: [searchInput], children: [searchInput],
+      });
+      const definition = new FakeContainer('dd', {
+        controls: [...postal, searchInput], labels: [hyphen],
+        children: [postalGroup, secondarySearchGroup],
+      });
+      postal[0].parentElement = firstWrapper;
+      postal[1].parentElement = secondWrapper;
+      searchInput.parentElement = secondarySearchGroup;
+      hyphen.parentElement = postalGroup;
+      searchButtons.push(searchButton, searchInput);
+      fields = postal;
+      result = { postal };
+      child = postalGroup;
+      controls.push(...postal, searchInput);
+      return { term, definition, fields, result, child };
+    }
+    if (label === 'Prefecture') {
+      const select = new FakeSelect({ id: `${prefix}-prefecture`, class: 'jqTransformHidden' }, [
+        new FakeOption('', 'Choose'), new FakeOption('pref-a', 'Prefecture A'),
+      ]);
+      let displayText = 'Choose';
+      const selectedClasses = select.options.map(() => new Set());
+      const links = select.options.map((option, index) => ({
+        tagName: 'A', textContent: option.textContent,
+        getAttribute(name) { return name === 'index' ? String(index) : null; },
+        classList: {
+          contains(name) { return selectedClasses[index].has(name); },
+          add(name) { selectedClasses[index].add(name); },
+          remove(name) { selectedClasses[index].delete(name); },
+        },
+      }));
+      const display = {
+        tagName: 'SPAN', get textContent() { return displayText; },
+        set textContent(value) { displayText = value; },
+      };
+      const bar = { tagName: 'DIV' };
+      const open = {
+        tagName: 'A', previousElementSibling: display, parentElement: bar,
+        getAttribute(name) { return name === 'class' ? 'jqTransformSelectOpen' : null; },
+      };
+      display.parentElement = bar;
+      const list = { tagName: 'UL' };
+      const wrapper = {
+        tagName: 'DIV', className: 'jqTransformSelectWrapper', parentElement: null,
+        children: [select],
+        classList: { contains(name) { return name === 'jqTransformSelectWrapper'; } },
+        querySelectorAll(selector) {
+          if (selector === 'input, select, textarea') return [select];
+          if (selector === 'a.jqTransformSelectOpen') return [open];
+          if (selector === 'div > span') return [display];
+          if (selector === 'ul') return [list];
+          if (selector === 'ul > li > a') return links;
+          if (selector === 'a') return [open, ...links];
+          return [];
+        },
+      };
+      const definition = new FakeContainer('dd', { controls: [select], children: [wrapper] });
+      select.parentElement = wrapper;
+      wrapper.parentElement = definition;
+      fields = [select];
+      result = { prefecture: select, display, selectedClasses };
+      child = wrapper;
+      controls.push(select);
+      return { term, definition, fields, result, child };
+    }
+    const input = new FakeInput({ type: 'text', id: `${prefix}-${label}` });
+    const definition = new FakeContainer('dd', { controls: [input], children: [input] });
+    fields = [input];
+    result = { [label]: input };
+    controls.push(input);
+    return { term, definition, fields, result, child: input };
+  };
+  const makeAddressSet = (prefix) => [
+    makeDefinition('郵便番号', prefix), makeDefinition('Prefecture', prefix),
+    makeDefinition('Street address', prefix), makeDefinition('Building', prefix),
+  ];
+  const current = makeAddressSet('current');
+  const vacation = makeAddressSet('vacation');
+  const phone = ['Fixed telephone', 'Mobile telephone'].map((label, index) => {
+    const initial = index === 0 ? ['03', '1234', '5678'] : ['090', '2345', '6789'];
+    const fields = [1, 2, 3].map((part) => new FakeInput(
+      { type: 'text', id: `phone-${index}-${part}` }, { value: initial[part - 1] },
+    ));
+    controls.push(...fields);
+    return { term: new FakeContainer('dt', { textContent: label }),
+      definition: new FakeContainer('dd', { controls: fields, children: fields }) };
+  });
+  const currentHeading = new FakeContainer('div', { textContent: '現住所' });
+  const vacationHeading = new FakeContainer('div', { textContent: '休暇中の連絡先' });
+  const auxiliaryHeading = new FakeContainer('div', {
+    textContent: '現住所と同じ場合はこちらにチェックしてください。',
+  });
+  const siblings = [currentHeading];
+  for (const [index, entry] of current.entries()) {
+    siblings.push(new FakeContainer('dl', { children: [entry.term, entry.definition] }));
+    if (index === 0) siblings.push(new FakeContainer('div', { textContent: 'Please enter complete details.' }));
+  }
+  for (const entry of phone) {
+    siblings.push(new FakeContainer('dl', { children: [entry.term, entry.definition] }));
+  }
+  siblings.push(vacationHeading, auxiliaryHeading);
+  for (const entry of vacation) {
+    siblings.push(new FakeContainer('dl', { children: [entry.term, entry.definition] }));
+  }
+  const commonParent = new FakeContainer('div', { children: siblings });
+  commonParent.className = 'eswrap';
+  const document = new FakeDocument(controls);
+  const result = fillDocument(document, {
+    currentPostalCode: '1234567',
+    currentPrefecture: 'Prefecture A',
+    currentAddress: 'Current street',
+    currentBuilding: 'Current building',
+  });
+  assert.equal(result.filledCount, 5);
+  assert.deepEqual(current[0].result.postal.map((control) => control.value), ['123', '4567']);
+  assert.equal(current[1].result.prefecture.value, 'pref-a');
+  assert.equal(current[1].result.display.textContent, 'Prefecture A');
+  assert.ok(current[1].result.selectedClasses[1].has('selected'));
+  assert.equal(current[2].result['Street address'].value, 'Current street');
+  assert.equal(current[3].result.Building.value, 'Current building');
+  assert.deepEqual(phone.map(({ definition }) => definition.controls.map((control) => control.value)), [
+    ['03', '1234', '5678'], ['090', '2345', '6789'],
+  ]);
+  assert.deepEqual(vacation[0].result.postal.map((control) => control.value), ['', '']);
+  assert.equal(vacation[1].result.prefecture.value, '');
+  assert.equal(vacation[2].result['Street address'].value, '');
+  assert.equal(vacation[3].result.Building.value, '');
+  assert.deepEqual([searchButtons[0].clicks, searchButtons[2].clicks], [0, 0]);
+  assert.deepEqual([searchButtons[1].value, searchButtons[3].value], ['', '']);
+});
+
+test('ambiguous sibling address headings leave the field unchanged', () => {
+  const input = new FakeInput({ type: 'text' }, { value: 'Existing value' });
+  const term = new FakeContainer('dt', { textContent: 'Street address' });
+  const definition = new FakeContainer('dd', { controls: [input], children: [input] });
+  const dl = new FakeContainer('dl', { children: [term, definition] });
+  const firstHeading = new FakeContainer('div', { textContent: '現住所' });
+  const secondHeading = new FakeContainer('div', { textContent: '現住所' });
+  new FakeContainer('div', { children: [firstHeading, secondHeading, dl] });
+
+  assert.deepEqual(fillDocument(new FakeDocument([input]), {
+    currentAddress: 'Replacement address',
+  }), { filledCount: 0, failedCount: 0 });
+  assert.equal(input.value, 'Existing value');
+});
+
+test('empty fixed phone profile value preserves typed fixed phone and never borrows mobile value', () => {
+  const fixed = [1, 2, 3].map((index) => new FakeInput({ type: 'text', name: `gtel${index}` }, {
+    value: ['018', '123', '4567'][index - 1],
+  }));
+  const mobile = [1, 2, 3].map((index) => new FakeInput({ type: 'text', name: `kttel${index}` }));
+  const labels = [new FakeLabel('固定電話番号'), new FakeLabel('携帯電話番号')];
+  const fixedGroup = new FakeContainer('div', {
+    controls: fixed, labels: [labels[0]], textContent: '固定電話番号--',
+  });
+  const mobileGroup = new FakeContainer('div', {
+    controls: mobile, labels: [labels[1]], textContent: '携帯電話番号--',
+  });
+  const document = new FakeDocument([...fixed, ...mobile], labels);
+
+  assert.deepEqual(fillDocument(document, {
+    phoneNumber: '', mobilePhone: '090-1234-5678',
+  }), { filledCount: 3, failedCount: 0 });
+  assert.deepEqual(fixed.map((control) => control.value), ['018', '123', '4567']);
+  assert.deepEqual(mobile.map((control) => control.value), ['090', '1234', '5678']);
+});
+
+test('multiple postal groups are ambiguous and remain unchanged', () => {
+  const groups = [0, 1].map((index) => {
+    const fields = [
+      new FakeInput({ type: 'text', name: `postal${index}a` }, { value: '111' }),
+      new FakeInput({ type: 'text', name: `postal${index}b` }, { value: '2222' }),
+    ];
+    const group = new FakeContainer('div', {
+      controls: fields,
+      labels: [new FakeLabel('郵便番号')],
+    });
+    return fields;
+  });
+  const document = new FakeDocument(groups.flat());
+
+  assert.deepEqual(fillDocument(document, { currentPostalCode: '0100001' }), {
+    filledCount: 0,
+    failedCount: 0,
+  });
+  assert.deepEqual(groups.map((group) => group.map((control) => control.value)), [
+    ['111', '2222'],
+    ['111', '2222'],
+  ]);
+});
+
+test('duplicate current address controls are ambiguous and remain unchanged', () => {
+  const first = new FakeInput({ type: 'text', id: 'address-one' }, { value: '入力済み1' });
+  const second = new FakeInput({ type: 'text', id: 'address-two' }, { value: '入力済み2' });
+  const labels = [
+    new FakeLabel('市区郡・地名・番地', 'address-one'),
+    new FakeLabel('市区郡・地名・番地', 'address-two'),
+  ];
+  const document = new FakeDocument([first, second], labels);
+
+  assert.deepEqual(fillDocument(document, { currentAddress: '秋田市山王1-1' }), {
+    filledCount: 0,
+    failedCount: 0,
+  });
+  assert.deepEqual([first.value, second.value], ['入力済み1', '入力済み2']);
 });
 
 test('bare surname and given-name labels need group or standard autocomplete context', () => {
@@ -1923,17 +2232,18 @@ test('nested select wrappers use their unique trailing year month day labels', (
     return wrapper;
   });
   const nestedRow = new FakeContainer('div', {
-    controls,
     labels,
     children: [wrappers[0], labels[0], wrappers[1], labels[1], wrappers[2], labels[2]],
   });
+  nestedRow.controls = controls;
   const term = new FakeContainer('dt', { textContent: '生年月日' });
   const definition = new FakeContainer('dd', {
-    controls,
     labels,
     children: [nestedRow],
   });
-  new FakeContainer('div', { controls, children: [term, definition] });
+  definition.controls = controls;
+  const formGroup = new FakeContainer('div', { children: [term, definition] });
+  formGroup.controls = controls;
   const document = new FakeDocument(controls, labels);
 
   for (const [index, [control, segment]] of [
