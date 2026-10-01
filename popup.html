@@ -226,6 +226,67 @@
         <label for="graduationMonth">卒業予定年月</label>
         <input id="graduationMonth" name="graduationMonth" type="month">
 
+        <h2 class="section-heading">学歴情報</h2>
+
+        <h3 class="section-heading">中学校</h3>
+        <label for="middleSchoolName">学校名</label>
+        <input id="middleSchoolName" type="text" autocomplete="off">
+        <label for="middleSchoolEnrollmentMonth">入学年月</label>
+        <input id="middleSchoolEnrollmentMonth" type="month">
+        <label for="middleSchoolGraduationMonth">卒業年月</label>
+        <input id="middleSchoolGraduationMonth" type="month">
+
+        <h3 class="section-heading">高等学校</h3>
+        <label for="highSchoolName">学校名</label>
+        <input id="highSchoolName" type="text" autocomplete="off">
+        <label for="highSchoolEnrollmentMonth">入学年月</label>
+        <input id="highSchoolEnrollmentMonth" type="month">
+        <label for="highSchoolGraduationMonth">卒業年月</label>
+        <input id="highSchoolGraduationMonth" type="month">
+
+        <h3 class="section-heading">大学（学士）</h3>
+        <label for="bachelorUniversityName">大学名</label>
+        <input id="bachelorUniversityName" type="text" autocomplete="off">
+        <label for="bachelorFacultyName">学部名</label>
+        <input id="bachelorFacultyName" type="text">
+        <label for="bachelorDepartmentName">学科名</label>
+        <input id="bachelorDepartmentName" type="text">
+        <label for="bachelorEnrollmentMonth">入学年月</label>
+        <input id="bachelorEnrollmentMonth" type="month">
+        <label for="bachelorGraduationMonth">卒業年月</label>
+        <input id="bachelorGraduationMonth" type="month">
+
+        <h3 class="section-heading">大学院（修士）</h3>
+        <label for="masterGraduateSchoolName">大学院学校名</label>
+        <input id="masterGraduateSchoolName" type="text" autocomplete="off">
+        <label for="masterGraduateDepartmentName">研究科名</label>
+        <input id="masterGraduateDepartmentName" type="text">
+        <label for="masterMajorName">専攻名</label>
+        <input id="masterMajorName" type="text">
+        <label for="masterEnrollmentMonth">入学年月</label>
+        <input id="masterEnrollmentMonth" type="month">
+        <label for="masterCompletionMonth">修了年月</label>
+        <input id="masterCompletionMonth" type="month">
+
+        <h3 class="section-heading">最終学歴</h3>
+        <label for="finalEducationLevel">学歴区分</label>
+        <select id="finalEducationLevel">
+          <option value="">未設定</option>
+          <option value="middleSchool">中学校</option>
+          <option value="highSchool">高等学校</option>
+          <option value="bachelor">大学（学士）</option>
+          <option value="master">大学院（修士）</option>
+          <option value="doctorate">大学院（博士）</option>
+        </select>
+        <label for="finalEducationCompletionStatus">卒業・修了状況</label>
+        <select id="finalEducationCompletionStatus">
+          <option value="">未設定</option>
+          <option value="graduated">卒業</option>
+          <option value="graduationExpected">卒業見込み</option>
+          <option value="completed">修了</option>
+          <option value="completionExpected">修了見込み</option>
+        </select>
+
         <h2 class="section-heading">研究情報</h2>
 
         <label for="laboratoryName">所属研究室</label>

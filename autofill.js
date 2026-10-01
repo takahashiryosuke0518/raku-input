@@ -43,6 +43,8 @@
   const MONTH_PROFILE_KEYS = new Set([
     'enrollmentMonth',
     'graduationMonth',
+    'finalEnrollmentMonth',
+    'finalCompletionMonth',
     'laboratoryStartMonth',
     'laboratoryEndMonth',
   ]);
@@ -1015,6 +1017,9 @@
     const onlyControls = options.onlyControls ? new Set(options.onlyControls) : null;
 
     for (const group of document.querySelectorAll('div[role="group"][data-date-field-input]')) {
+      const skipControls = new Set(options.skipControls || []);
+      const groupControls = queryElements(group, 'input, select, textarea');
+      if (groupControls.some((control) => skipControls.has(control))) continue;
       const fieldset = group.closest && group.closest('fieldset');
       if (group.getAttribute('aria-disabled') === 'true'
         || group.getAttribute('aria-readonly') === 'true'
@@ -1152,6 +1157,449 @@
   function confirmationHint(value) {
     const hint = normalizeHint(value).replace(/\s/g, '');
     return /確認|再入力|もう一度|confirm|reenter|re-enter/.test(hint);
+  }
+
+  function compactEducationText(value) {
+    return normalizeHint(value).replace(/[\s()（）・･:：]/g, '');
+  }
+
+  function compactEducationTerm(value) {
+    const withoutAnnotations = String(value || '')
+      .normalize('NFKC')
+      .replace(/^[\s◆◇■□●○◎★☆※＊*・･]+/u, '')
+      .replace(/\([^)]*\)|\[[^\]]*\]|【[^】]*】/g, ' ')
+      .replace(/(?:※|注[意]?[:：]?)[\s\S]*$/u, ' ')
+      .replace(/(?:全角|半角)?\d+文字以内[\s\S]*$/u, ' ');
+    return compactEducationText(withoutAnnotations);
+  }
+
+  function isFormalEducationHeading(element) {
+    const tagName = elementTagName(element);
+    if (/^h[1-6]$/.test(tagName) || tagName === 'legend') return true;
+    if (tagName !== 'div') return false;
+    const className = typeof element.className === 'string'
+      ? element.className
+      : typeof element.getAttribute === 'function'
+        ? String(element.getAttribute('class') || '')
+        : '';
+    return /(?:^|[\s_-])(?:heading|headline|title|ttl)(?:[\s_-]|$)/i.test(className);
+  }
+
+  function educationMarker(element) {
+    if (!element || ['dt', 'label', 'th', 'button'].includes(elementTagName(element))
+      || queryElements(element, 'input, select, textarea').length) return null;
+    const text = compactEducationText(element.textContent || '');
+    const markers = new Map([
+      ['中学校', 'middleSchool'],
+      ['高等学校', 'highSchool'],
+      ['高等学校中等教育学校', 'highSchool'],
+      ['出身大学学士', 'bachelor'],
+      ['出身大学修士', 'master'],
+      ['出身大学博士', 'excluded'],
+      ['大学院博士', 'excluded'],
+      ['博士課程', 'excluded'],
+      ['最終学歴', 'finalEducation'],
+      ['最終学歴情報', 'finalEducation'],
+      ['その他学歴', 'excluded'],
+      ['高等専門学校', 'excluded'],
+      ['高専', 'excluded'],
+    ]);
+    if (markers.has(text)) return { key: markers.get(text), text };
+    if (text === '最終学歴情報をご確認の上、間違いがある場合は修正してください。'
+      && isFormalEducationHeading(element)) {
+      return { key: 'finalEducation', text };
+    }
+
+    // Unknown school headings form a boundary and are reserved from legacy
+    // generic filling, but never authorize a history record.
+    const describesInstruction = /場合|回答|入力|選択|チェック|該当|してください|同じ/.test(text);
+    const looksLikeShortHeading = text.length <= 24
+      && /(?:学校|大学|大学院|学歴|中学|高校|高等|修士|博士|高専)$/.test(text);
+    if (!describesInstruction && looksLikeShortHeading) {
+      return { key: 'unknown', text };
+    }
+    return null;
+  }
+
+  function educationSectionForControl(control) {
+    let branch = control;
+    for (let depth = 0; branch && depth < 16; depth += 1) {
+      const parent = branch.parentElement;
+      if (!parent || !parent.children) break;
+      const siblings = Array.from(parent.children);
+      const branchIndex = siblings.indexOf(branch);
+      if (branchIndex < 0) break;
+      const markers = siblings.map((element, index) => ({
+        index,
+        marker: educationMarker(element),
+      })).filter((entry) => entry.marker);
+      if (markers.length) {
+        const preceding = markers.filter((entry) => entry.index < branchIndex);
+        if (!preceding.length) return { status: 'excluded', key: null };
+        const active = preceding.at(-1);
+        const sameKind = markers.filter((entry) => entry.marker.key === active.marker.key);
+        if (sameKind.length !== 1 || active.marker.key === 'unknown') {
+          return { status: 'ambiguous', key: null };
+        }
+        return active.marker.key === 'excluded'
+          ? { status: 'excluded', key: null }
+          : { status: 'included', key: active.marker.key };
+      }
+      branch = parent;
+    }
+    return { status: 'none', key: null };
+  }
+
+  function educationFieldKey(sectionKey, label) {
+    const text = compactEducationTerm(label);
+    const mappings = {
+      middleSchool: {
+        schoolName: ['学校名', '中学校名'],
+      },
+      highSchool: {
+        schoolName: ['学校名', '高等学校名', '高校名'],
+      },
+      bachelor: {
+        universityName: ['大学名', '学校名', '大学学校名'],
+        facultyName: ['学部名', '大学学部名'],
+        departmentName: ['学科名', '大学学科名'],
+      },
+      master: {
+        graduateSchoolName: ['大学院学校名', '大学院名', '大学名', '学校名'],
+        graduateDepartmentName: ['研究科名'],
+        majorName: ['専攻名'],
+      },
+      finalEducation: {
+        level: ['学歴区分'],
+        completionStatus: ['卒業修了区分', '卒業修了状況'],
+      },
+    };
+    for (const [key, labels] of Object.entries(mappings[sectionKey] || {})) {
+      if (labels.includes(text)) return key;
+    }
+    return null;
+  }
+
+  function educationDateKind(label, sectionKey) {
+    const text = compactEducationTerm(label);
+    if (/^入学(?:卒業|修了)年月$/.test(text)) return 'combined';
+    if (/^入学(?:年月|年|月)?$/.test(text)) return 'enrollment';
+    if (sectionKey === 'master') {
+      if (/^(?:修了|修了予定)(?:年月|年|月)?$/.test(text)) return 'completion';
+    }
+    if (sectionKey === 'finalEducation') {
+      if (/^(?:卒業修了|卒業|修了)(?:年月|年|月)?$/.test(text)) return 'completion';
+    } else if (/^(?:卒業|卒業予定|修了|修了予定)(?:年月|年|月)?$/.test(text)) {
+      return 'completion';
+    }
+    return null;
+  }
+
+  function exactEducationTerm(control) {
+    const definition = getPairedDefinition(control);
+    if (definition && elementTagName(definition.previousElementSibling) === 'dt') {
+      return String(definition.previousElementSibling.textContent || '').trim();
+    }
+    const metadata = collectFieldMetadata(control, control.ownerDocument);
+    return [...metadata.labelTexts, ...metadata.nearLabelTexts].length === 1
+      ? [...metadata.labelTexts, ...metadata.nearLabelTexts][0]
+      : '';
+  }
+
+  function educationStageAllowed(stage, finalLevel) {
+    if (stage === 'bachelor') return finalLevel === 'master' || finalLevel === 'doctorate';
+    if (stage === 'master') return finalLevel === 'doctorate';
+    return stage === 'middleSchool' || stage === 'highSchool';
+  }
+
+  function sameEducationName(left, right) {
+    return typeof left === 'string' && typeof right === 'string'
+      && left.normalize('NFKC').trim() !== ''
+      && left.normalize('NFKC').trim() === right.normalize('NFKC').trim();
+  }
+
+  function resolveEducationMonths(profile, stage) {
+    const history = profile && profile.educationHistory && profile.educationHistory[stage];
+    const record = history && typeof history === 'object' ? history : {};
+    const institution = record.schoolName || record.universityName || record.graduateSchoolName || '';
+    const legacyMatch = sameEducationName(institution, profile && profile.schoolName);
+    const enrollmentMonth = typeof record.enrollmentMonth === 'string' ? record.enrollmentMonth.trim() : '';
+    const completionValue = stage === 'master' ? record.completionMonth : record.graduationMonth;
+    const completionMonth = typeof completionValue === 'string' ? completionValue.trim() : '';
+    return {
+      enrollmentMonth: enrollmentMonth || (legacyMatch ? String(profile.enrollmentMonth || '').trim() : ''),
+      completionMonth: completionMonth || (legacyMatch ? String(profile.graduationMonth || '').trim() : ''),
+    };
+  }
+
+  function optionForEducationValue(control, profileKey, value) {
+    const aliases = profileKey === 'level'
+      ? {
+        middleSchool: ['中学校'], highSchool: ['高等学校'], bachelor: ['大学（学士）', '大学（学部）'],
+        master: ['大学院（修士）', '修士'], doctorate: ['大学院（博士）', '博士'],
+      }
+      : {
+        graduated: ['卒業'], graduationExpected: ['卒業見込み', '卒業予定'],
+        completed: ['修了'], completionExpected: ['修了見込み', '修了予定'],
+      };
+    const acceptedLabels = (aliases[value] || []).map(compactEducationText);
+    const matches = Array.from(control.options || []).filter((option) => !option.disabled && (
+      String(option.value || '') === value
+      || acceptedLabels.includes(compactEducationText(option.label || option.textContent || ''))
+    ));
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function fillEducationSections(document, profile, options = {}) {
+    const controls = Array.from(document.querySelectorAll('input, select, textarea'));
+    const reserved = new Set();
+    const records = new Map();
+    const finalLevel = String(profile && profile.finalEducation && profile.finalEducation.level || '');
+    for (const control of controls) {
+      const section = educationSectionForControl(control);
+      if (section.status === 'none') continue;
+      reserved.add(control);
+      if (section.status !== 'included') continue;
+      if (!records.has(section.key)) records.set(section.key, []);
+      records.get(section.key).push(control);
+    }
+
+    const onlyProfileKeys = options.onlyProfileKeys ? new Set(options.onlyProfileKeys) : null;
+    const skipProfileKeys = new Set(options.skipProfileKeys || []);
+    const onlyControls = options.onlyControls ? new Set(options.onlyControls) : null;
+    const allowed = (key, group) => !skipProfileKeys.has(key)
+      && (!onlyProfileKeys || onlyProfileKeys.has(key))
+      && (!onlyControls || group.every((control) => onlyControls.has(control)));
+    const result = { filledCount: 0, failedCount: 0, controls: reserved };
+    const setValue = (control, key, value, segment = null) => {
+      if (control.disabled || control.readOnly
+        || (typeof control.matches === 'function' && control.matches(':disabled'))) return;
+      try {
+        const success = setFormControlValue(control, { profileKey: key, segment }, value, document);
+        if (success) {
+          result.filledCount += 1;
+        } else result.failedCount += 1;
+      } catch (_error) {
+        result.failedCount += 1;
+      }
+    };
+
+    for (const [sectionKey, sectionControls] of records) {
+      const stage = ['middleSchool', 'highSchool', 'bachelor', 'master'].includes(sectionKey)
+        ? sectionKey
+        : null;
+      const eligible = !stage || educationStageAllowed(stage, finalLevel);
+      const fieldGroups = new Map();
+      const dateGroups = new Map();
+      for (const control of sectionControls) {
+        const definition = getPairedDefinition(control);
+        const term = exactEducationTerm(control);
+        const fieldKey = educationFieldKey(sectionKey, term);
+        if (fieldKey) {
+          if (!fieldGroups.has(fieldKey)) fieldGroups.set(fieldKey, []);
+          fieldGroups.get(fieldKey).push(control);
+          continue;
+        }
+        if (!definition) continue;
+        const kind = educationDateKind(term, sectionKey);
+        if (!kind) continue;
+        if (!dateGroups.has(definition)) dateGroups.set(definition, { kind, controls: [] });
+        dateGroups.get(definition).controls.push(control);
+      }
+
+      if (eligible && stage) {
+        const historyRecord = profile && profile.educationHistory && profile.educationHistory[stage];
+        const source = historyRecord && typeof historyRecord === 'object' ? historyRecord : {};
+        for (const [fieldKey, fieldControls] of fieldGroups) {
+          if (fieldControls.length !== 1) continue;
+          if (!allowed(fieldKey, fieldControls)) continue;
+          const rawValue = source[fieldKey];
+          const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+          if (value) setValue(fieldControls[0], fieldKey, value);
+        }
+      } else if (eligible && sectionKey === 'finalEducation') {
+        for (const [fieldKey, fieldControls] of fieldGroups) {
+          if (fieldControls.length !== 1) continue;
+          if (!allowed(fieldKey, fieldControls)) continue;
+          const rawValue = fieldKey === 'level' ? finalLevel
+            : String(profile && profile.finalEducation && profile.finalEducation.completionStatus || '');
+          if (!rawValue) continue;
+          const option = optionForEducationValue(fieldControls[0], fieldKey, rawValue);
+          if (option) setValue(fieldControls[0], fieldKey, option.label || option.textContent || option.value);
+        }
+      }
+
+      if (!eligible) continue;
+      const dateKindCounts = new Map();
+      for (const group of dateGroups.values()) {
+        dateKindCounts.set(group.kind, (dateKindCounts.get(group.kind) || 0) + 1);
+      }
+      for (const { kind, controls: dateControls } of dateGroups.values()) {
+        if (dateKindCounts.get(kind) !== 1) continue;
+        if (kind === 'combined') {
+          const definition = getPairedDefinition(dateControls[0]);
+          const allDefinitionControls = definition
+            ? queryElements(definition, 'input, select, textarea')
+            : [];
+          const selects = allDefinitionControls
+            .filter((control) => elementTagName(control) === 'select');
+          const segments = definition ? getSelectUnitSegments(definition, selects) : [];
+          const validStructure = definition
+            && allDefinitionControls.length === 4
+            && selects.length === 4
+            && dateControls.length === 4
+            && dateControls.every((control) => selects.includes(control))
+            && segments.join(',') === 'year,month,year,month';
+          if (!validStructure) continue;
+
+          const dateSource = sectionKey === 'finalEducation'
+            ? resolveEducationMonths(profile, finalLevel)
+            : null;
+          const historyRecord = profile?.educationHistory?.[sectionKey];
+          const enrollmentRaw = dateSource
+            ? dateSource.enrollmentMonth
+            : historyRecord?.enrollmentMonth;
+          const completionRaw = dateSource
+            ? dateSource.completionMonth
+            : sectionKey === 'master'
+              ? historyRecord?.completionMonth
+              : historyRecord?.graduationMonth;
+          const enrollment = getMonthComponents(
+            typeof enrollmentRaw === 'string' ? enrollmentRaw.trim() : '',
+          );
+          const completion = getMonthComponents(
+            typeof completionRaw === 'string' ? completionRaw.trim() : '',
+          );
+          if (!enrollment || !completion) continue;
+
+          const enrollmentKey = sectionKey === 'finalEducation'
+            ? 'finalEnrollmentMonth'
+            : 'enrollmentMonth';
+          const completionKey = sectionKey === 'finalEducation'
+            ? 'finalCompletionMonth'
+            : 'graduationMonth';
+          if (!allowed(enrollmentKey, selects.slice(0, 2))
+            || !allowed(completionKey, selects.slice(2))) continue;
+
+          const values = [enrollment.year, enrollment.month, completion.year, completion.month];
+          const matchingOptions = selects.map((select, index) => (
+            findMatchingOption(select, values[index], segments[index])
+          ));
+          if (matchingOptions.some((option) => !option)) continue;
+
+          const setterKeys = [enrollmentKey, enrollmentKey, completionKey, completionKey];
+          for (let index = 0; index < selects.length; index += 1) {
+            setValue(selects[index], setterKeys[index], values[index], segments[index]);
+          }
+          continue;
+        }
+        if (sectionKey === 'finalEducation' && kind === 'completion' && dateControls.length === 3) {
+          const definition = getPairedDefinition(dateControls[0]);
+          const allDefinitionControls = definition
+            ? queryElements(definition, 'input, select, textarea')
+            : [];
+          const selects = allDefinitionControls
+            .filter((control) => elementTagName(control) === 'select');
+          const segments = definition ? getSelectUnitSegments(definition, selects) : [];
+          const validStructure = definition
+            && allDefinitionControls.length === 3
+            && selects.length === 3
+            && dateControls.length === 3
+            && dateControls.every((control) => selects.includes(control))
+            && segments[0] === 'year'
+            && segments[1] === 'month'
+            && segments[2] === null;
+          if (!validStructure) continue;
+
+          const dateSource = resolveEducationMonths(profile, finalLevel);
+          const components = getMonthComponents(
+            typeof dateSource.completionMonth === 'string' ? dateSource.completionMonth.trim() : '',
+          );
+          const completionStatus = String(
+            profile && profile.finalEducation && profile.finalEducation.completionStatus || '',
+          );
+          const yearOption = components
+            ? findMatchingOption(selects[0], components.year, 'year')
+            : null;
+          const monthOption = components
+            ? findMatchingOption(selects[1], components.month, 'month')
+            : null;
+          const statusOption = completionStatus
+            ? optionForEducationValue(selects[2], 'completionStatus', completionStatus)
+            : null;
+          if (!components || !completionStatus) continue;
+          if (!allowed('finalCompletionMonth', selects.slice(0, 2))
+            || !allowed('completionStatus', [selects[2]])) continue;
+          if (!yearOption || !monthOption || !statusOption) continue;
+
+          setValue(selects[0], 'finalCompletionMonth', components.year, 'year');
+          setValue(selects[1], 'finalCompletionMonth', components.month, 'month');
+          setValue(
+            selects[2], 'completionStatus',
+            statusOption.label || statusOption.textContent || statusOption.value,
+          );
+          continue;
+        }
+        if (dateControls.length === 1) {
+          const control = dateControls[0];
+          const tagName = elementTagName(control);
+          const key = sectionKey === 'finalEducation'
+            ? (kind === 'enrollment' ? 'finalEnrollmentMonth' : 'finalCompletionMonth')
+            : kind === 'enrollment' ? 'enrollmentMonth' : 'graduationMonth';
+          const dateSource = sectionKey === 'finalEducation'
+            ? resolveEducationMonths(profile, finalLevel)
+            : null;
+          const rawValue = dateSource
+            ? (kind === 'enrollment' ? dateSource.enrollmentMonth : dateSource.completionMonth)
+            : kind === 'enrollment'
+              ? profile?.educationHistory?.[sectionKey]?.enrollmentMonth
+              : sectionKey === 'master'
+                ? profile?.educationHistory?.[sectionKey]?.completionMonth
+                : profile?.educationHistory?.[sectionKey]?.graduationMonth;
+          const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+          if (!value) continue;
+          if (!allowed(key, [control])) continue;
+          if (tagName === 'input' && String(control.getAttribute('type') || control.type) === 'month') {
+            setValue(control, key, value);
+          }
+          continue;
+        }
+        const definition = getPairedDefinition(dateControls[0]);
+        if (!definition) continue;
+        const allDefinitionControls = queryElements(definition, 'input, select, textarea');
+        const selects = allDefinitionControls.filter((control) => elementTagName(control) === 'select');
+        const segments = getSelectUnitSegments(definition, selects);
+        const years = selects.filter((_select, index) => segments[index] === 'year');
+        const months = selects.filter((_select, index) => segments[index] === 'month');
+        if (allDefinitionControls.length !== 2 || selects.length !== 2
+          || years.length !== 1 || months.length !== 1
+          || dateControls.length !== 2 || !dateControls.every((control) => selects.includes(control))) continue;
+        const dateSource = sectionKey === 'finalEducation'
+          ? resolveEducationMonths(profile, finalLevel)
+          : null;
+        const rawValue = dateSource
+          ? (kind === 'enrollment' ? dateSource.enrollmentMonth : dateSource.completionMonth)
+          : kind === 'enrollment'
+            ? profile?.educationHistory?.[sectionKey]?.enrollmentMonth
+            : sectionKey === 'master'
+              ? profile?.educationHistory?.[sectionKey]?.completionMonth
+              : profile?.educationHistory?.[sectionKey]?.graduationMonth;
+        const components = getMonthComponents(typeof rawValue === 'string' ? rawValue.trim() : '');
+        const key = sectionKey === 'finalEducation'
+          ? (kind === 'enrollment' ? 'finalEnrollmentMonth' : 'finalCompletionMonth')
+          : kind === 'enrollment' ? 'enrollmentMonth' : 'graduationMonth';
+        if (!components) continue;
+        if (!allowed(key, selects)) continue;
+        const year = years[0];
+        const month = months[0];
+        const yearOption = findMatchingOption(year, components.year, 'year');
+        const monthOption = findMatchingOption(month, components.month, 'month');
+        if (!yearOption || !monthOption) continue;
+        setValue(year, key, components.year, 'year');
+        setValue(month, key, components.month, 'month');
+      }
+    }
+    return result;
   }
 
   function ancestorContainers(control) {
@@ -1369,14 +1817,17 @@
     const radioResult = fillGenderRadios(document, profile || {}, options);
     const contactResult = fillSplitContactGroups(document, profile || {}, options);
     const postalResult = fillSplitPostalGroups(document, profile || {}, options);
-    let filledCount = radioResult.filledCount + contactResult.filledCount + postalResult.filledCount;
-    let failedCount = postalResult.failedCount;
+    const educationResult = fillEducationSections(document, profile || {}, options);
+    let filledCount = radioResult.filledCount + contactResult.filledCount
+      + postalResult.filledCount + educationResult.filledCount;
+    let failedCount = postalResult.failedCount + educationResult.failedCount;
     const onlyProfileKeys = options.onlyProfileKeys
       ? new Set(options.onlyProfileKeys)
       : null;
     const skipProfileKeys = new Set(options.skipProfileKeys || []);
     const onlyControls = options.onlyControls ? new Set(options.onlyControls) : null;
     const skipControls = options.skipControls ? new Set(options.skipControls) : null;
+    const allSkipControls = new Set([...(skipControls || []), ...educationResult.controls]);
     const emailEntries = Array.from(document.querySelectorAll('input, select, textarea'))
       .filter((control) => String(control.tagName || '').toLowerCase() === 'input'
         && ['text', 'email'].includes(String(control.getAttribute('type') || control.type || 'text').toLowerCase())
@@ -1415,7 +1866,7 @@
     }
     for (const control of document.querySelectorAll('input, select, textarea')) {
       if (radioResult.controls.has(control) || contactResult.controls.has(control)
-        || postalResult.controls.has(control)) continue;
+        || postalResult.controls.has(control) || educationResult.controls.has(control)) continue;
       if (onlyControls && !onlyControls.has(control)) continue;
       if (skipControls && skipControls.has(control)) continue;
       const tagName = String(control.tagName || '').toLowerCase();
@@ -1440,15 +1891,11 @@
         if ([
           'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
         ].includes(classification.profileKey)
-          && addressScopeSkipReason(control, document, metadata)) {
-          continue;
-        }
+          && addressScopeSkipReason(control, document, metadata)) continue;
         if ([
           'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
         ].includes(classification.profileKey)
-          && addressMatchCounts.get(classification.profileKey) !== 1) {
-          continue;
-        }
+          && addressMatchCounts.get(classification.profileKey) !== 1) continue;
         const storedValue = profile && profile[classification.profileKey];
         const value = valueForControl(
           classification.profileKey,
@@ -1463,7 +1910,10 @@
       }
     }
 
-    const customMonths = fillCustomMonthGroups(document, profile, options);
+    const customMonths = fillCustomMonthGroups(document, profile, {
+      ...options,
+      skipControls: allSkipControls,
+    });
     filledCount += customMonths.filledCount;
     failedCount += customMonths.failedCount;
     return { filledCount, failedCount };
@@ -1651,7 +2101,8 @@
   async function fillDocumentAsync(document, profile, options = {}) {
     const schoolComboboxes = controlsForProfileKey(document, 'schoolName')
       .filter((control) => control.getAttribute('role') === 'combobox'
-        && /^(list|both)$/.test(control.getAttribute('aria-autocomplete') || ''));
+        && /^(list|both)$/.test(control.getAttribute('aria-autocomplete') || '')
+        && educationSectionForControl(control).status === 'none');
     if (!schoolComboboxes.length || !profile || !profile.schoolName) {
       return fillDocument(document, profile);
     }
@@ -1662,7 +2113,9 @@
     const dependentControls = ['departmentName', 'majorName']
       .flatMap((key) => controlsForProfileKey(document, key))
       .filter((control) => relatedToSchoolControl(control, usableSchoolComboboxes));
-    const result = fillDocument(document, profile, { skipControls: dependentControls });
+    const result = fillDocument(document, profile, {
+      skipControls: dependentControls,
+    });
     if (!usableSchoolComboboxes.length) {
       result.failedCount += 1;
       return result;
@@ -1670,7 +2123,8 @@
     let schoolSelected = false;
     let selectedSchoolControl = null;
     for (const control of usableSchoolComboboxes) {
-      if (await selectAriaComboboxOption(control, profile.schoolName, document, options)) {
+      const selected = await selectAriaComboboxOption(control, profile.schoolName, document, options);
+      if (selected) {
         result.filledCount += 1;
         schoolSelected = true;
         selectedSchoolControl = control;

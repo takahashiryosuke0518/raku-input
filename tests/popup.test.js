@@ -34,6 +34,27 @@ const PROFILE_KEYS = [
   'researchOverview',
 ];
 
+const EDUCATION_FIELDS = [
+  ['middleSchoolName', 'middleSchool', 'schoolName'],
+  ['middleSchoolEnrollmentMonth', 'middleSchool', 'enrollmentMonth'],
+  ['middleSchoolGraduationMonth', 'middleSchool', 'graduationMonth'],
+  ['highSchoolName', 'highSchool', 'schoolName'],
+  ['highSchoolEnrollmentMonth', 'highSchool', 'enrollmentMonth'],
+  ['highSchoolGraduationMonth', 'highSchool', 'graduationMonth'],
+  ['bachelorUniversityName', 'bachelor', 'universityName'],
+  ['bachelorFacultyName', 'bachelor', 'facultyName'],
+  ['bachelorDepartmentName', 'bachelor', 'departmentName'],
+  ['bachelorEnrollmentMonth', 'bachelor', 'enrollmentMonth'],
+  ['bachelorGraduationMonth', 'bachelor', 'graduationMonth'],
+  ['masterGraduateSchoolName', 'master', 'graduateSchoolName'],
+  ['masterGraduateDepartmentName', 'master', 'graduateDepartmentName'],
+  ['masterMajorName', 'master', 'majorName'],
+  ['masterEnrollmentMonth', 'master', 'enrollmentMonth'],
+  ['masterCompletionMonth', 'master', 'completionMonth'],
+  ['finalEducationLevel', 'finalEducation', 'level'],
+  ['finalEducationCompletionStatus', 'finalEducation', 'completionStatus'],
+];
+
 const SAVED_PROFILE = {
   familyName: '保存姓',
   givenName: '保存名',
@@ -63,11 +84,24 @@ const SAVED_PROFILE = {
   laboratoryEndMonth: '2028-03',
   researchKeywords: ['医療画像処理', '深層学習', 'PET'],
   researchOverview: '研究内容...',
+  educationHistory: {
+    middleSchool: { schoolName: '市立中学校', enrollmentMonth: '2012-04', graduationMonth: '2015-03' },
+    highSchool: { schoolName: '県立高校', enrollmentMonth: '2015-04', graduationMonth: '2018-03' },
+    bachelor: {
+      universityName: '県立大学', facultyName: '工学部', departmentName: '情報学科',
+      enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+    },
+    master: {
+      graduateSchoolName: '県立大学大学院', graduateDepartmentName: 'システム科学技術研究科',
+      majorName: '総合システム工学専攻', enrollmentMonth: '2022-04', completionMonth: '2024-03',
+    },
+  },
+  finalEducation: { level: 'master', completionStatus: 'completionExpected' },
 };
 
 function createFakeDocument(values = {}) {
   const elements = Object.fromEntries([
-    ...PROFILE_KEYS.map((id) => [id, {
+    ...[...PROFILE_KEYS, ...EDUCATION_FIELDS.map(([id]) => id)].map((id) => [id, {
       id,
       value: Array.isArray(values[id]) ? values[id].join('\n') : (values[id] || ''),
       disabled: false,
@@ -100,7 +134,7 @@ function createHarness(options = {}) {
     async save(profile) {
       this.saveCalls.push(profile);
       if (options.saveError) throw options.saveError;
-      return Object.fromEntries(
+      const normalized = Object.fromEntries(
         PROFILE_KEYS.map((key) => [
           key,
           key === 'researchKeywords'
@@ -108,6 +142,15 @@ function createHarness(options = {}) {
             : String(profile[key] || '').trim(),
         ]),
       );
+      normalized.educationHistory = Object.fromEntries(Object.entries(profile.educationHistory).map(
+        ([stage, record]) => [stage, Object.fromEntries(Object.entries(record).map(
+          ([key, value]) => [key, String(value || '').trim()],
+        ))],
+      ));
+      normalized.finalEducation = Object.fromEntries(Object.entries(profile.finalEducation).map(
+        ([key, value]) => [key, String(value || '').trim()],
+      ));
+      return normalized;
     },
   };
   const tabsApi = {
@@ -150,6 +193,12 @@ test('init restores all saved values into the popup', async () => {
         key === 'researchKeywords' ? SAVED_PROFILE[key].join('\n') : SAVED_PROFILE[key]
       ),
     );
+  }
+  for (const [id, stage, key] of EDUCATION_FIELDS) {
+    const value = stage === 'finalEducation'
+      ? SAVED_PROFILE.finalEducation[key]
+      : SAVED_PROFILE.educationHistory[stage][key];
+    assert.equal(harness.document.elements[id].value, value);
   }
   assert.equal(harness.document.elements.status.textContent, '');
 });
@@ -204,6 +253,24 @@ test('saveProfile stores all fields, reapplies normalized values, and reports su
       laboratoryEndMonth: ' 2028-03 ',
       researchKeywords: '医療画像処理\n深層学習\nPET',
       researchOverview: ' 研究内容... ',
+      middleSchoolName: ' 市立中学校 ',
+      middleSchoolEnrollmentMonth: ' 2012-04 ',
+      middleSchoolGraduationMonth: ' 2015-03 ',
+      highSchoolName: ' 県立高校 ',
+      highSchoolEnrollmentMonth: ' 2015-04 ',
+      highSchoolGraduationMonth: ' 2018-03 ',
+      bachelorUniversityName: ' 県立大学 ',
+      bachelorFacultyName: ' 工学部 ',
+      bachelorDepartmentName: ' 情報学科 ',
+      bachelorEnrollmentMonth: ' 2018-04 ',
+      bachelorGraduationMonth: ' 2022-03 ',
+      masterGraduateSchoolName: ' 県立大学大学院 ',
+      masterGraduateDepartmentName: ' システム科学技術研究科 ',
+      masterMajorName: ' 総合システム工学専攻 ',
+      masterEnrollmentMonth: ' 2022-04 ',
+      masterCompletionMonth: ' 2024-03 ',
+      finalEducationLevel: ' master ',
+      finalEducationCompletionStatus: ' completionExpected ',
     },
   });
 
@@ -238,12 +305,28 @@ test('saveProfile stores all fields, reapplies normalized values, and reports su
     laboratoryEndMonth: ' 2028-03 ',
     researchKeywords: ['医療画像処理', '深層学習', 'PET'],
     researchOverview: ' 研究内容... ',
+    educationHistory: {
+      middleSchool: { schoolName: ' 市立中学校 ', enrollmentMonth: ' 2012-04 ', graduationMonth: ' 2015-03 ' },
+      highSchool: { schoolName: ' 県立高校 ', enrollmentMonth: ' 2015-04 ', graduationMonth: ' 2018-03 ' },
+      bachelor: {
+        universityName: ' 県立大学 ', facultyName: ' 工学部 ', departmentName: ' 情報学科 ',
+        enrollmentMonth: ' 2018-04 ', graduationMonth: ' 2022-03 ',
+      },
+      master: {
+        graduateSchoolName: ' 県立大学大学院 ', graduateDepartmentName: ' システム科学技術研究科 ',
+        majorName: ' 総合システム工学専攻 ', enrollmentMonth: ' 2022-04 ', completionMonth: ' 2024-03 ',
+      },
+    },
+    finalEducation: { level: ' master ', completionStatus: ' completionExpected ' },
   }]);
   assert.equal(harness.document.elements.familyName.value, '姓の値');
   assert.equal(harness.document.elements.birthDate.value, '2002-05-18');
   assert.equal(harness.document.elements.gender.value, '男性');
   assert.equal(harness.document.elements.currentPrefecture.value, '秋田県');
   assert.equal(harness.document.elements.homePrefecture.value, '宮城県');
+  assert.equal(harness.document.elements.masterGraduateSchoolName.value, '県立大学大学院');
+  assert.equal(harness.document.elements.masterGraduateDepartmentName.value, 'システム科学技術研究科');
+  assert.equal(harness.document.elements.finalEducationLevel.value, 'master');
   assert.equal(harness.document.elements.status.textContent, '保存しました。');
   assert.equal(harness.document.elements.status.dataset.kind, 'success');
 });

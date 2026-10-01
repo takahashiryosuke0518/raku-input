@@ -958,6 +958,445 @@ class FakeDocument {
   }
 }
 
+function educationFixtureField(label, control) {
+  const term = new FakeContainer('dt', { textContent: label });
+  const definition = new FakeContainer('dd', { controls: [control], children: [control] });
+  const row = new FakeContainer('dl', { children: [term, definition] });
+  row.controls = [control];
+  return { row, control };
+}
+
+function educationFixtureHeading(text, className = '') {
+  const heading = new FakeContainer('div', { textContent: text });
+  heading.className = className;
+  return heading;
+}
+
+function jqTransformFixtureWrapper(select) {
+  const wrapper = new FakeContainer('span', { controls: [select], children: [select] });
+  wrapper.className = 'jqTransformSelectWrapper';
+  wrapper.classList = { contains: (name) => name === 'jqTransformSelectWrapper' };
+  const display = { tagName: 'SPAN', textContent: '', parentElement: null };
+  const optionLinks = select.options.map((option, index) => {
+    const classes = new Set();
+    return {
+      tagName: 'A', textContent: option.textContent,
+      getAttribute: (name) => name === 'index' ? String(index) : null,
+      classList: {
+        contains: (name) => classes.has(name),
+        add: (name) => classes.add(name),
+        remove: (name) => classes.delete(name),
+      },
+    };
+  });
+  const open = { tagName: 'A', previousElementSibling: display, parentElement: null };
+  const displayHost = { children: [display, open] };
+  display.parentElement = displayHost;
+  open.parentElement = displayHost;
+  const list = { tagName: 'UL' };
+  wrapper.querySelectorAll = (selector) => ({
+    'input, select, textarea': [select],
+    'a.jqTransformSelectOpen': [open],
+    'div > span': [display],
+    ul: [list],
+    'ul > li > a': optionLinks,
+    a: [open, ...optionLinks],
+  }[selector] || []);
+  select.jqDisplay = display;
+  return wrapper;
+}
+
+function educationDateField(label, date) {
+  const [yearValue, monthValue] = date.split('-');
+  const year = new FakeSelect({}, [new FakeOption('', '年'), new FakeOption(yearValue, `${yearValue}年`)]);
+  const month = new FakeSelect({}, [new FakeOption('', '月'), new FakeOption(monthValue, `${Number(monthValue)}月`)]);
+  const yearWrapper = jqTransformFixtureWrapper(year);
+  const monthWrapper = jqTransformFixtureWrapper(month);
+  const yearLabel = new FakeLabel('年');
+  const monthLabel = new FakeLabel('月');
+  const term = new FakeContainer('dt', { textContent: label });
+  const definition = new FakeContainer('dd', {
+    labels: [yearLabel, monthLabel],
+    children: [yearWrapper, yearLabel, monthWrapper, monthLabel],
+  });
+  definition.controls = [year, month];
+  const row = new FakeContainer('dl', { children: [term, definition] });
+  row.controls = [year, month];
+  return { row, controls: [year, month], year, month };
+}
+
+function textFromFixtureMarkup(markup) {
+  return String(markup || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+}
+
+function educationDocumentFromFixtureHtml(html) {
+  const formBody = /<form>\s*<div[^>]*>([\s\S]*)<\/div>\s*<\/form>/.exec(html)?.[1] || '';
+  const blocks = formBody.match(/<div\b[^>]*>[\s\S]*?<\/div>|<dl\b[^>]*>[\s\S]*?<\/dl>/g) || [];
+  const children = [];
+  const controls = [];
+  const rows = [];
+
+  for (const block of blocks) {
+    if (/^<div\b/.test(block)) {
+      const className = /\bclass="([^"]*)"/.exec(block)?.[1] || '';
+      children.push(educationFixtureHeading(textFromFixtureMarkup(block), className));
+      continue;
+    }
+    const match = /^<dl\b[^>]*>\s*<dt[^>]*>([\s\S]*?)<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>\s*<\/dl>$/.exec(block);
+    assert.ok(match, 'fixture DL must contain one DT followed by one DD');
+    const termText = textFromFixtureMarkup(match[1]);
+    const definitionMarkup = match[2];
+    const definitionChildren = [];
+    const definitionControls = [];
+    const definitionLabels = [];
+    const items = definitionMarkup.match(/<input\b[^>]*>|<span\b[^>]*jqTransformSelectWrapper[^>]*>[\s\S]*?<\/span>|<select\b[^>]*>[\s\S]*?<\/select>|<label\b[^>]*>[\s\S]*?<\/label>/g) || [];
+    for (const item of items) {
+      if (/^<input\b/.test(item)) {
+        const type = /\btype="([^"]+)"/.exec(item)?.[1] || 'text';
+        const control = new FakeInput({ type });
+        definitionChildren.push(control);
+        definitionControls.push(control);
+        controls.push(control);
+      } else if (/^<span\b/.test(item) || /^<select\b/.test(item)) {
+        const selectMarkup = /<select\b[^>]*>([\s\S]*?)<\/select>/.exec(item)?.[1] || '';
+        const options = [...selectMarkup.matchAll(/<option\b[^>]*value="([^"]*)"[^>]*>([\s\S]*?)<\/option>/g)]
+          .map((option) => new FakeOption(option[1], textFromFixtureMarkup(option[2])));
+        const control = new FakeSelect({}, options);
+        definitionChildren.push(/^<span\b/.test(item) ? jqTransformFixtureWrapper(control) : control);
+        definitionControls.push(control);
+        controls.push(control);
+      } else {
+        const label = new FakeLabel(textFromFixtureMarkup(item));
+        definitionChildren.push(label);
+        definitionLabels.push(label);
+      }
+    }
+    const term = new FakeContainer('dt', { textContent: termText });
+    const definition = new FakeContainer('dd', {
+      labels: definitionLabels,
+      children: definitionChildren,
+    });
+    definition.controls = definitionControls;
+    const row = new FakeContainer('dl', { children: [term, definition] });
+    row.controls = definitionControls;
+    children.push(row);
+    rows.push({ term: termText, controls: definitionControls });
+  }
+  const root = new FakeContainer('div', { children });
+  root.controls = controls;
+  return { document: new FakeDocument(controls), rows };
+}
+
+test('realistic education HTML classifies decorated mixed-node DT labels by school section', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures', 'education-history-form.html'), 'utf8');
+  const { document, rows } = educationDocumentFromFixtureHtml(html);
+  const profile = {
+    schoolName: '旧プロフィール大学',
+    finalEducation: { level: 'doctorate', completionStatus: 'completed' },
+    educationHistory: {
+      middleSchool: {
+        schoolName: '市立中学校', enrollmentMonth: '2020-04', graduationMonth: '2023-03',
+      },
+      highSchool: {
+        schoolName: '県立高等学校', enrollmentMonth: '2023-04', graduationMonth: '2026-03',
+      },
+      bachelor: {
+        universityName: '学士大学', facultyName: '理工学部', departmentName: '情報学科',
+        enrollmentMonth: '2026-04', graduationMonth: '2030-03',
+      },
+      master: {
+        graduateSchoolName: '修士大学院', graduateDepartmentName: '工学研究科', majorName: '情報専攻',
+        enrollmentMonth: '2030-04', completionMonth: '2032-03',
+      },
+    },
+  };
+
+  fillDocument(document, profile);
+
+  assert.equal(rows[0].controls[0].value, '市立中学校');
+  assert.deepEqual(rows[1].controls.map((control) => control.value), ['2020', '4', '2023', '3']);
+  assert.equal(rows[2].controls[0].value, '県立高等学校');
+  assert.deepEqual(rows[3].controls.map((control) => control.value), ['2023', '4', '2026', '3']);
+  assert.deepEqual(rows.slice(4, 7).map((row) => row.controls[0].value), ['学士大学', '理工学部', '情報学科']);
+  assert.deepEqual(rows[7].controls.map((control) => control.value), ['2026', '4', '2030', '3']);
+  assert.deepEqual(rows.slice(8, 11).map((row) => row.controls[0].value), ['修士大学院', '工学研究科', '情報専攻']);
+  for (const row of [rows[1], rows[3], rows[7]]) {
+    for (const control of row.controls) {
+      assert.equal(control.jqDisplay.textContent, control.options[control.selectedIndex].textContent);
+    }
+  }
+});
+
+test('bachelor-prefixed field labels are not assigned in another school section', () => {
+  const control = new FakeInput();
+  const root = new FakeContainer('div', { children: [
+    educationFixtureHeading('中学校'), educationFixtureField('大学学校名', control).row,
+  ] });
+  root.controls = [control];
+
+  fillDocument(new FakeDocument([control]), {
+    schoolName: '旧プロフィール大学',
+    educationHistory: {
+      middleSchool: { schoolName: '中学校名' },
+      bachelor: { universityName: '大学名' },
+    },
+  });
+
+  assert.equal(control.value, '');
+});
+
+test('final education fixture uses the selected master record for its independent admission row', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures', 'education-history-form.html'), 'utf8');
+  const { document, rows } = educationDocumentFromFixtureHtml(html);
+  const conditionalMasterValuesBefore = rows.slice(8, 13)
+    .flatMap((row) => row.controls.map((control) => control.value));
+
+  fillDocument(document, {
+    schoolName: '異なる旧プロフィール大学',
+    enrollmentMonth: '2018-04',
+    graduationMonth: '2022-03',
+    finalEducation: { level: 'master', completionStatus: 'completed' },
+    educationHistory: {
+      bachelor: {
+        universityName: '学士大学', enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+      },
+      master: {
+        graduateSchoolName: '修士大学院', enrollmentMonth: '2022-04', completionMonth: '2024-03',
+      },
+    },
+  });
+
+  assert.deepEqual(
+    rows.slice(8, 13).flatMap((row) => row.controls.map((control) => control.value)),
+    conditionalMasterValuesBefore,
+  );
+  assert.equal(rows[13].controls[0].value, 'master');
+  assert.deepEqual(rows[14].controls.map((control) => control.value), ['2022', '4']);
+  assert.deepEqual(rows[15].controls.map((control) => control.value), ['2024', '3', 'completed']);
+  for (const row of [rows[14], rows[15]]) {
+    for (const control of row.controls) {
+      assert.equal(control.jqDisplay.textContent, control.options[control.selectedIndex].textContent);
+    }
+  }
+});
+
+test('final education explanatory text is not a boundary without formal heading semantics', () => {
+  const admission = educationDateField('◆入学年月', '2022-04');
+  const root = new FakeContainer('div', { children: [
+    educationFixtureHeading('出身大学（修士）', 'heading_l2'),
+    educationFixtureHeading('最終学歴情報をご確認の上、間違いがある場合は修正してください。'),
+    admission.row,
+  ] });
+  root.controls = admission.controls;
+  const document = new FakeDocument(admission.controls);
+  const valuesBefore = admission.controls.map((control) => control.value);
+
+  fillDocument(document, {
+    finalEducation: { level: 'master', completionStatus: 'completed' },
+    educationHistory: {
+      master: { enrollmentMonth: '2022-04', completionMonth: '2024-03' },
+    },
+  });
+
+  assert.deepEqual(admission.controls.map((control) => control.value), valuesBefore);
+});
+
+test('combined education dates skip unless the four select segments are exactly year month year month', () => {
+  const selects = [
+    new FakeSelect({}, [new FakeOption('', '年'), new FakeOption('2020', '2020年')]),
+    new FakeSelect({}, [new FakeOption('', '月'), new FakeOption('4', '4月')]),
+    new FakeSelect({}, [new FakeOption('', '年'), new FakeOption('2023', '2023年')]),
+  ];
+  const labels = [new FakeLabel('年'), new FakeLabel('月'), new FakeLabel('年')];
+  const children = selects.flatMap((select, index) => [jqTransformFixtureWrapper(select), labels[index]]);
+  const term = new FakeContainer('dt', { textContent: '入学／卒業年月' });
+  const definition = new FakeContainer('dd', { labels, children });
+  definition.controls = selects;
+  const row = new FakeContainer('dl', { children: [term, definition] });
+  row.controls = selects;
+  const root = new FakeContainer('div', { children: [educationFixtureHeading('中学校'), row] });
+  root.controls = selects;
+
+  fillDocument(new FakeDocument(selects), {
+    educationHistory: {
+      middleSchool: { enrollmentMonth: '2020-04', graduationMonth: '2023-03' },
+    },
+  });
+
+  assert.deepEqual(selects.map((control) => control.value), ['', '', '']);
+});
+
+test('education history routes by exact school section and never broadcasts legacy schoolName', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures', 'education-history-form.html'), 'utf8');
+  assert.match(html, /高等学校（中等教育学校）/);
+  assert.match(html, /出身大学（学士）/);
+  assert.match(html, /出身大学（修士）/);
+  const middle = new FakeInput();
+  const high = new FakeInput();
+  const bachelor = new FakeInput();
+  const master = new FakeInput();
+  const other = new FakeInput();
+  const kosen = new FakeInput();
+  const doctorate = new FakeInput();
+  const middleField = educationFixtureField('学校名', middle);
+  const highField = educationFixtureField('学校名', high);
+  const bachelorField = educationFixtureField('大学名', bachelor);
+  const masterField = educationFixtureField('大学院学校名', master);
+  const otherField = educationFixtureField('学校名', other);
+  const kosenField = educationFixtureField('学校名', kosen);
+  const root = new FakeContainer('div', { children: [
+    educationFixtureHeading('中学校'), middleField.row,
+    educationFixtureHeading('高等学校（中等教育学校）'), highField.row,
+    educationFixtureHeading('出身大学（学士）'), bachelorField.row,
+    educationFixtureHeading('出身大学（修士）'), masterField.row,
+    educationFixtureHeading('その他学歴'), otherField.row,
+    educationFixtureHeading('高等専門学校'), kosenField.row,
+    educationFixtureHeading('大学院（博士）'), educationFixtureField('大学院学校名', doctorate).row,
+  ] });
+  root.controls = [middle, high, bachelor, master, other, kosen, doctorate];
+  const document = new FakeDocument(root.controls);
+  const profile = {
+    schoolName: '旧プロフィールの大学名',
+    departmentName: '旧プロフィールの学部名',
+    majorName: '旧プロフィールの専攻名',
+    enrollmentMonth: '2018-04',
+    graduationMonth: '2022-03',
+    finalEducation: { level: 'master', completionStatus: 'completed' },
+    educationHistory: {
+      middleSchool: { schoolName: '市立中学校' },
+      highSchool: { schoolName: '県立高等学校' },
+      bachelor: { universityName: '学士大学' },
+      master: { graduateSchoolName: '修士大学院' },
+    },
+  };
+
+  fillDocument(document, profile);
+
+  assert.equal(middle.value, '市立中学校');
+  assert.equal(high.value, '県立高等学校');
+  assert.equal(bachelor.value, '学士大学');
+  assert.equal(master.value, '', '修士の履歴は博士向け欄に入力しない');
+  assert.equal(other.value, '');
+  assert.equal(kosen.value, '');
+  assert.equal(doctorate.value, '', '博士課程向け未対応欄にも旧プロフィールを転用しない');
+});
+
+test('education sections map independent fields and four split dates, syncing jqTransform selects', () => {
+  const bachelorName = new FakeInput();
+  const faculty = new FakeInput();
+  const department = new FakeInput();
+  const bachelorAdmission = educationDateField('入学年月', '2018-04');
+  const bachelorGraduation = educationDateField('卒業年月', '2022-03');
+  const masterName = new FakeInput();
+  const researchDepartment = new FakeInput();
+  const major = new FakeInput();
+  const masterAdmission = educationDateField('入学年月', '2022-04');
+  const masterCompletion = educationDateField('修了年月', '2024-03');
+  const root = new FakeContainer('div', { children: [
+    educationFixtureHeading('出身大学（学士）'),
+    educationFixtureField('大学名', bachelorName).row,
+    educationFixtureField('学部名', faculty).row,
+    educationFixtureField('学科名', department).row,
+    bachelorAdmission.row, bachelorGraduation.row,
+    educationFixtureHeading('出身大学（修士）'),
+    educationFixtureField('大学院学校名', masterName).row,
+    educationFixtureField('研究科名', researchDepartment).row,
+    educationFixtureField('専攻名', major).row,
+    masterAdmission.row, masterCompletion.row,
+  ] });
+  const controls = [bachelorName, faculty, department, masterName, researchDepartment, major,
+    ...bachelorAdmission.controls, ...bachelorGraduation.controls,
+    ...masterAdmission.controls, ...masterCompletion.controls];
+  root.controls = controls;
+  const document = new FakeDocument(controls);
+  fillDocument(document, {
+    finalEducation: { level: 'doctorate', completionStatus: '' },
+    educationHistory: {
+      bachelor: {
+        universityName: '学士大学', facultyName: '理工学部', departmentName: '情報学科',
+        enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+      },
+      master: {
+        graduateSchoolName: '修士大学院', graduateDepartmentName: '工学研究科', majorName: '情報専攻',
+        enrollmentMonth: '2022-04', completionMonth: '2024-03',
+      },
+    },
+  });
+
+  assert.deepEqual([bachelorName.value, faculty.value, department.value], ['学士大学', '理工学部', '情報学科']);
+  assert.deepEqual([masterName.value, researchDepartment.value, major.value], ['修士大学院', '工学研究科', '情報専攻']);
+  for (const field of [bachelorAdmission, bachelorGraduation, masterAdmission, masterCompletion]) {
+    assert.deepEqual([field.year.value, field.month.value], [field.year.options[1].value, field.month.options[1].value]);
+    assert.equal(field.year.jqDisplay.textContent, field.year.options[1].textContent);
+    assert.equal(field.month.jqDisplay.textContent, field.month.options[1].textContent);
+  }
+});
+
+test('final education selects and dates use only the selected stage record', () => {
+  const level = new FakeSelect({}, [
+    new FakeOption('', '未設定'), new FakeOption('master', '大学院（修士）'),
+  ]);
+  const status = new FakeSelect({}, [
+    new FakeOption('', '未設定'), new FakeOption('completed', '修了'),
+  ]);
+  const levelRow = educationFixtureField('学歴区分', level).row;
+  const statusRow = educationFixtureField('卒業・修了区分', status).row;
+  const admission = educationDateField('入学年月', '2022-04');
+  const completion = educationDateField('卒業・修了年月', '2024-03');
+  const root = new FakeContainer('div', { children: [
+    educationFixtureHeading('最終学歴情報'), levelRow, admission.row, completion.row, statusRow,
+  ] });
+  const controls = [level, status, ...admission.controls, ...completion.controls];
+  root.controls = controls;
+  const document = new FakeDocument(controls);
+  fillDocument(document, {
+    schoolName: '異なる旧プロフィール大学', enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+    finalEducation: { level: 'master', completionStatus: 'completed' },
+    educationHistory: {
+      bachelor: { universityName: '別の学士大学', enrollmentMonth: '2018-04', graduationMonth: '2022-03' },
+      master: { graduateSchoolName: '最終大学院', enrollmentMonth: '2022-04', completionMonth: '2024-03' },
+    },
+  });
+
+  assert.equal(level.value, 'master');
+  assert.equal(status.value, 'completed');
+  assert.deepEqual([admission.year.value, admission.month.value], ['2022', '04']);
+  assert.deepEqual([completion.year.value, completion.month.value], ['2024', '03']);
+});
+
+test('duplicate education headings or repeated date groups are left unchanged', () => {
+  const firstSchool = new FakeInput({}, { value: '既存値A' });
+  const secondSchool = new FakeInput({}, { value: '既存値B' });
+  const duplicatedAdmissionA = educationDateField('入学年月', '2018-04');
+  const duplicatedAdmissionB = educationDateField('入学年月', '2018-04');
+  const uniqueGraduation = educationDateField('卒業年月', '2022-03');
+  const root = new FakeContainer('div', { children: [
+    educationFixtureHeading('中学校'), educationFixtureField('学校名', firstSchool).row,
+    educationFixtureHeading('中学校'), educationFixtureField('学校名', secondSchool).row,
+    educationFixtureHeading('出身大学（学士）'), duplicatedAdmissionA.row,
+    duplicatedAdmissionB.row, uniqueGraduation.row,
+  ] });
+  const controls = [firstSchool, secondSchool, ...duplicatedAdmissionA.controls,
+    ...duplicatedAdmissionB.controls, ...uniqueGraduation.controls];
+  root.controls = controls;
+  fillDocument(new FakeDocument(controls), {
+    schoolName: '旧プロフィール大学',
+    finalEducation: { level: 'master' },
+    educationHistory: {
+      middleSchool: { schoolName: '新しい中学校名' },
+      bachelor: {
+        enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+      },
+    },
+  });
+
+  assert.deepEqual([firstSchool.value, secondSchool.value], ['既存値A', '既存値B']);
+  for (const control of [...duplicatedAdmissionA.controls, ...duplicatedAdmissionB.controls]) {
+    assert.equal(control.value, '');
+  }
+  assert.deepEqual([uniqueGraduation.year.value, uniqueGraduation.month.value], ['2022', '03']);
+});
+
 test('collectFieldMetadata reads labels and every supported attribute source', () => {
   const parentLabel = new FakeLabel('親ラベル');
   const input = new FakeInput({

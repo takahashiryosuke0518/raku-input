@@ -36,6 +36,17 @@ const EMPTY_PROFILE = {
   laboratoryEndMonth: '',
   researchKeywords: [],
   researchOverview: '',
+  educationHistory: {
+    middleSchool: { schoolName: '', enrollmentMonth: '', graduationMonth: '' },
+    highSchool: { schoolName: '', enrollmentMonth: '', graduationMonth: '' },
+    bachelor: {
+      universityName: '', facultyName: '', departmentName: '', enrollmentMonth: '', graduationMonth: '',
+    },
+    master: {
+      graduateSchoolName: '', graduateDepartmentName: '', majorName: '', enrollmentMonth: '', completionMonth: '',
+    },
+  },
+  finalEducation: { level: '', completionStatus: '' },
 };
 
 function createFakeStorage(initial = {}) {
@@ -78,6 +89,19 @@ test('normalizeProfile keeps all profile fields, trims strings, and normalizes k
       laboratoryName: ' ○○研究室 ',
       laboratoryStartMonth: ' 2026-04 ',
       laboratoryEndMonth: ' 2028-03 ',
+      educationHistory: {
+        middleSchool: { schoolName: ' 中学校 ', enrollmentMonth: ' 2012-04 ', graduationMonth: ' 2015-03 ' },
+        highSchool: { schoolName: ' 高等学校 ', enrollmentMonth: ' 2015-04 ', graduationMonth: ' 2018-03 ' },
+        bachelor: {
+          universityName: ' 大学 ', facultyName: ' 学部 ', departmentName: ' 学科 ',
+          enrollmentMonth: ' 2018-04 ', graduationMonth: ' 2022-03 ',
+        },
+        master: {
+          graduateSchoolName: ' 大学院 ', graduateDepartmentName: ' 研究科 ', majorName: ' 専攻 ',
+          enrollmentMonth: ' 2022-04 ', completionMonth: ' 2024-03 ',
+        },
+      },
+      finalEducation: { level: 'master', completionStatus: 'completionExpected' },
       researchKeywords: [' 医療画像処理 ', '', '深層学習', 1, 'PET '],
       researchOverview: ' 研究内容... ',
       extra: 'ignored',
@@ -111,6 +135,19 @@ test('normalizeProfile keeps all profile fields, trims strings, and normalizes k
       laboratoryEndMonth: '2028-03',
       researchKeywords: ['医療画像処理', '深層学習', 'PET'],
       researchOverview: '研究内容...',
+      educationHistory: {
+        middleSchool: { schoolName: '中学校', enrollmentMonth: '2012-04', graduationMonth: '2015-03' },
+        highSchool: { schoolName: '高等学校', enrollmentMonth: '2015-04', graduationMonth: '2018-03' },
+        bachelor: {
+          universityName: '大学', facultyName: '学部', departmentName: '学科',
+          enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+        },
+        master: {
+          graduateSchoolName: '大学院', graduateDepartmentName: '研究科', majorName: '専攻',
+          enrollmentMonth: '2022-04', completionMonth: '2024-03',
+        },
+      },
+      finalEducation: { level: 'master', completionStatus: 'completionExpected' },
     },
   );
   assert.deepEqual(PROFILE_KEYS, [
@@ -164,6 +201,44 @@ test('normalizeProfile stores current postal code and address components', () =>
   });
 });
 
+test('final education dates prefer its matching history record and only use matching legacy school data as fallback', () => {
+  const { resolveFinalEducationMonths } = require('../profile-storage.js');
+  assert.deepEqual(resolveFinalEducationMonths({
+    finalEducation: { level: 'master' },
+    educationHistory: {
+      master: {
+        graduateSchoolName: '大学院A', enrollmentMonth: '2022-04', completionMonth: '2024-03',
+      },
+    },
+    schoolName: '大学院A', enrollmentMonth: '2021-04', graduationMonth: '2023-03',
+  }), { enrollmentMonth: '2022-04', completionMonth: '2024-03' });
+
+  assert.deepEqual(resolveFinalEducationMonths({
+    finalEducation: { level: 'bachelor' },
+    educationHistory: { bachelor: { universityName: '旧プロフィールの大学' } },
+    schoolName: '旧プロフィールの大学', enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+  }), { enrollmentMonth: '2018-04', completionMonth: '2022-03' });
+
+  assert.deepEqual(resolveFinalEducationMonths({
+    finalEducation: { level: 'bachelor' },
+    educationHistory: { bachelor: { universityName: '別の大学' } },
+    schoolName: '旧プロフィールの大学', enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+  }), { enrollmentMonth: '', completionMonth: '' });
+
+  const doctorate = normalizeProfile({
+    finalEducation: { level: 'doctorate', completionStatus: 'completionExpected' },
+    educationHistory: {
+      master: { graduateSchoolName: '修士課程', enrollmentMonth: '2022-04', completionMonth: '2024-03' },
+    },
+  });
+  assert.deepEqual(doctorate.finalEducation, {
+    level: 'doctorate', completionStatus: 'completionExpected',
+  });
+  assert.deepEqual(resolveFinalEducationMonths(doctorate), {
+    enrollmentMonth: '', completionMonth: '',
+  });
+});
+
 test('load fills missing saved fields without leaking extra fields', async () => {
   const area = createFakeStorage({
     profile: { givenName: '保存値', extra: 'ignored' },
@@ -174,6 +249,27 @@ test('load fills missing saved fields without leaking extra fields', async () =>
     ...EMPTY_PROFILE,
     givenName: '保存値',
   });
+});
+
+test('old single-school profiles remain intact without being copied into history records', async () => {
+  const area = createFakeStorage({
+    profile: {
+      schoolName: '旧プロフィールの大学',
+      departmentName: '旧プロフィールの研究科',
+      majorName: '旧プロフィールの専攻',
+      enrollmentMonth: '2022-04',
+      graduationMonth: '2024-03',
+    },
+  });
+  const profile = await createProfileStorage(area).load();
+
+  assert.equal(profile.schoolName, '旧プロフィールの大学');
+  assert.equal(profile.departmentName, '旧プロフィールの研究科');
+  assert.equal(profile.majorName, '旧プロフィールの専攻');
+  assert.equal(profile.enrollmentMonth, '2022-04');
+  assert.equal(profile.graduationMonth, '2024-03');
+  assert.deepEqual(profile.educationHistory, EMPTY_PROFILE.educationHistory);
+  assert.deepEqual(profile.finalEducation, { level: '', completionStatus: '' });
 });
 
 test('save stores one normalized profile object and returns it', async () => {
@@ -205,6 +301,19 @@ test('save stores one normalized profile object and returns it', async () => {
     laboratoryEndMonth: ' 2028-03 ',
     researchKeywords: [' 医療画像処理 ', '深層学習', 'PET '],
     researchOverview: ' 研究内容... ',
+    educationHistory: {
+      middleSchool: { schoolName: ' 中学校 ', enrollmentMonth: ' 2012-04 ', graduationMonth: ' 2015-03 ' },
+      highSchool: { schoolName: ' 高等学校 ', enrollmentMonth: ' 2015-04 ', graduationMonth: ' 2018-03 ' },
+      bachelor: {
+        universityName: ' 大学 ', facultyName: ' 学部 ', departmentName: ' 学科 ',
+        enrollmentMonth: ' 2018-04 ', graduationMonth: ' 2022-03 ',
+      },
+      master: {
+        graduateSchoolName: ' 大学院 ', graduateDepartmentName: ' 研究科 ', majorName: ' 専攻 ',
+        enrollmentMonth: ' 2022-04 ', completionMonth: ' 2024-03 ',
+      },
+    },
+    finalEducation: { level: 'master', completionStatus: 'completionExpected' },
   };
   const expected = {
     familyName: '姓の値',
@@ -235,6 +344,19 @@ test('save stores one normalized profile object and returns it', async () => {
     laboratoryEndMonth: '2028-03',
     researchKeywords: ['医療画像処理', '深層学習', 'PET'],
     researchOverview: '研究内容...',
+    educationHistory: {
+      middleSchool: { schoolName: '中学校', enrollmentMonth: '2012-04', graduationMonth: '2015-03' },
+      highSchool: { schoolName: '高等学校', enrollmentMonth: '2015-04', graduationMonth: '2018-03' },
+      bachelor: {
+        universityName: '大学', facultyName: '学部', departmentName: '学科',
+        enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+      },
+      master: {
+        graduateSchoolName: '大学院', graduateDepartmentName: '研究科', majorName: '専攻',
+        enrollmentMonth: '2022-04', completionMonth: '2024-03',
+      },
+    },
+    finalEducation: { level: 'master', completionStatus: 'completionExpected' },
   };
 
   assert.deepEqual(await storage.save(input), expected);

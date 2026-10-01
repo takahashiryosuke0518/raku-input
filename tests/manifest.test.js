@@ -62,6 +62,24 @@ test('popup contains all profile fields, sections, actions, status region, and o
     'laboratoryEndMonth',
     'researchKeywords',
     'researchOverview',
+    'middleSchoolName',
+    'middleSchoolEnrollmentMonth',
+    'middleSchoolGraduationMonth',
+    'highSchoolName',
+    'highSchoolEnrollmentMonth',
+    'highSchoolGraduationMonth',
+    'bachelorUniversityName',
+    'bachelorFacultyName',
+    'bachelorDepartmentName',
+    'bachelorEnrollmentMonth',
+    'bachelorGraduationMonth',
+    'masterGraduateSchoolName',
+    'masterGraduateDepartmentName',
+    'masterMajorName',
+    'masterEnrollmentMonth',
+    'masterCompletionMonth',
+    'finalEducationLevel',
+    'finalEducationCompletionStatus',
     'saveButton',
     'fillButton',
     'status',
@@ -76,9 +94,12 @@ test('popup contains all profile fields, sections, actions, status region, and o
   assert.match(popup, /<select[^>]+id=["']homePrefecture["']/);
   assert.match(popup, /<option[^>]+value=["']秋田県["'][^>]*>秋田県<\/option>/);
   assert.match(popup, /<option[^>]+value=["']海外["'][^>]*>海外<\/option>/);
-  for (const section of ['基本情報', '所在地', '学校情報', '研究情報']) {
+  for (const section of ['基本情報', '所在地', '学校情報', '学歴情報', '中学校', '高等学校', '大学（学士）', '大学院（修士）', '最終学歴', '研究情報']) {
     assert.ok(popup.includes(section), `missing section: ${section}`);
   }
+  assert.match(popup, /<label for=["']masterGraduateSchoolName["']>大学院学校名<\/label>\s*<input id=["']masterGraduateSchoolName["']/);
+  assert.match(popup, /<label for=["']masterGraduateDepartmentName["']>研究科名<\/label>\s*<input id=["']masterGraduateDepartmentName["']/);
+  assert.match(popup, /<option[^>]+value=["']doctorate["']>大学院（博士）<\/option>/);
   assert.match(popup, /id=["']status["'][^>]*aria-live=["']polite["']/);
   assert.match(popup, /<link[^>]+href=["']popup\.css["']/);
 

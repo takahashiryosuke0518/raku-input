@@ -65,9 +65,31 @@
     'researchOverview',
   ];
 
+  const EDUCATION_FIELD_BINDINGS = [
+    ['middleSchoolName', 'educationHistory', 'middleSchool', 'schoolName'],
+    ['middleSchoolEnrollmentMonth', 'educationHistory', 'middleSchool', 'enrollmentMonth'],
+    ['middleSchoolGraduationMonth', 'educationHistory', 'middleSchool', 'graduationMonth'],
+    ['highSchoolName', 'educationHistory', 'highSchool', 'schoolName'],
+    ['highSchoolEnrollmentMonth', 'educationHistory', 'highSchool', 'enrollmentMonth'],
+    ['highSchoolGraduationMonth', 'educationHistory', 'highSchool', 'graduationMonth'],
+    ['bachelorUniversityName', 'educationHistory', 'bachelor', 'universityName'],
+    ['bachelorFacultyName', 'educationHistory', 'bachelor', 'facultyName'],
+    ['bachelorDepartmentName', 'educationHistory', 'bachelor', 'departmentName'],
+    ['bachelorEnrollmentMonth', 'educationHistory', 'bachelor', 'enrollmentMonth'],
+    ['bachelorGraduationMonth', 'educationHistory', 'bachelor', 'graduationMonth'],
+    ['masterGraduateSchoolName', 'educationHistory', 'master', 'graduateSchoolName'],
+    ['masterGraduateDepartmentName', 'educationHistory', 'master', 'graduateDepartmentName'],
+    ['masterMajorName', 'educationHistory', 'master', 'majorName'],
+    ['masterEnrollmentMonth', 'educationHistory', 'master', 'enrollmentMonth'],
+    ['masterCompletionMonth', 'educationHistory', 'master', 'completionMonth'],
+    ['finalEducationLevel', 'finalEducation', '', 'level'],
+    ['finalEducationCompletionStatus', 'finalEducation', '', 'completionStatus'],
+  ];
+
   function createPopupController({ document, storageApi, tabsApi, scriptingApi }) {
     const fields = Object.fromEntries(
-      PROFILE_KEYS.map((key) => [key, document.getElementById(key)]),
+      [...PROFILE_KEYS, ...EDUCATION_FIELD_BINDINGS.map(([id]) => id)]
+        .map((key) => [key, document.getElementById(key)]),
     );
     const status = document.getElementById('status');
 
@@ -77,12 +99,21 @@
     }
 
     function readForm() {
-      return Object.fromEntries(PROFILE_KEYS.map((key) => [
+      const profile = Object.fromEntries(PROFILE_KEYS.map((key) => [
         key,
         key === 'researchKeywords'
           ? fields[key].value.split(/[\n,、]/).map((value) => value.trim()).filter(Boolean)
           : fields[key].value,
       ]));
+      profile.educationHistory = {};
+      profile.finalEducation = {};
+      for (const [id, section, stage, key] of EDUCATION_FIELD_BINDINGS) {
+        const destination = section === 'educationHistory'
+          ? (profile.educationHistory[stage] ||= {})
+          : profile.finalEducation;
+        destination[key] = fields[id].value;
+      }
+      return profile;
     }
 
     function writeForm(profile) {
@@ -90,6 +121,14 @@
         fields[key].value = key === 'researchKeywords'
           ? (Array.isArray(profile[key]) ? profile[key].join('\n') : '')
           : (profile[key] || '');
+      }
+      for (const [id, section, stage, key] of EDUCATION_FIELD_BINDINGS) {
+        const value = section === 'educationHistory'
+          ? profile.educationHistory && profile.educationHistory[stage]
+            ? profile.educationHistory[stage][key]
+            : ''
+          : profile.finalEducation && profile.finalEducation[key];
+        fields[id].value = value || '';
       }
     }
 
@@ -145,9 +184,18 @@
         return;
       }
 
-      if (!PROFILE_KEYS.some((key) => (
+      const hasLegacyData = PROFILE_KEYS.some((key) => (
         Array.isArray(profile[key]) ? profile[key].length > 0 : Boolean(profile[key])
-      ))) {
+      ));
+      const hasEducationData = EDUCATION_FIELD_BINDINGS.some(([id, section, stage, key]) => {
+        const value = section === 'educationHistory'
+          ? profile.educationHistory && profile.educationHistory[stage]
+            ? profile.educationHistory[stage][key]
+            : ''
+          : profile.finalEducation && profile.finalEducation[key];
+        return Boolean(value);
+      });
+      if (!hasLegacyData && !hasEducationData) {
         setStatus('先にプロフィールを保存してください。', 'warning');
         return;
       }
