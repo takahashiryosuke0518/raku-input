@@ -67,6 +67,76 @@
       <label for="fullName">氏名（1欄）</label>
       <input id="fullName" name="full_name" type="text">
 
+      <fieldset>
+        <legend>旧式フォームの最小サンプル</legend>
+        <div class="legacy-control" data-label="姓："><label for="text">姓：</label><input name="kname1" type="text"></div>
+        <div class="legacy-control" data-label="名："><label for="text">名：</label><input name="kname2" type="text"></div>
+        <div class="legacy-control" data-label="セイ："><label for="text">セイ：</label><input name="yname1" type="text"></div>
+        <div class="legacy-control" data-label="メイ："><label for="text">メイ：</label><input name="yname2" type="text"></div>
+
+        <div class="legacy-control" data-label="生年月日 年"><label for="text">生年月日 年：</label><select name="ybirth"><option value="">年</option><option value="2002">2002年</option></select></div>
+        <div class="legacy-control" data-label="生年月日 月"><label for="text">月：</label><select name="mbirth"><option value="">月</option><option value="5">5月</option></select></div>
+        <div class="legacy-control" data-label="生年月日 日"><label for="text">日：</label><select name="dbirth"><option value="">日</option><option value="18">18日</option></select></div>
+
+        <ul class="legacy-gender">
+          <li class="legacy-radio-option"><input id="gender-male" name="sexcd" type="radio" value="1"><label for="text">男</label></li>
+          <li class="legacy-radio-option"><input id="gender-female" name="sexcd" type="radio" value="2"><label for="text">女</label></li>
+        </ul>
+
+        <div class="legacy-control" data-label="卒業年月 年"><label for="text">年：</label><select name="syear"><option value="">年</option><option value="2028">2028年</option></select></div>
+        <div class="legacy-control" data-label="卒業年月 月"><label for="text">月：</label><select name="smonth"><option value="">月</option><option value="3">3月</option></select></div>
+        <select name="shikbn"><option>卒業（修了）見込み</option><option>卒業（修了）</option></select>
+
+        <div class="legacy-phone-group" data-label="固定電話番号"><label for="text">固定電話番号</label><input name="gtel1" type="text">-<input name="gtel2" type="text">-<input name="gtel3" type="text"></div>
+        <div class="legacy-phone-group" data-label="携帯電話番号"><label for="text">携帯電話番号</label><input name="kttel1" type="text">-<input name="kttel2" type="text">-<input name="kttel3" type="text"></div>
+        <div class="legacy-email-group" data-label="メールアドレス"><label for="text">メールアドレス</label><input name="account1" type="text">＠<input name="domain1" type="text"></div>
+        <div class="legacy-email-group" data-label="メールアドレス再入力"><label for="text">メールアドレス再入力</label><input name="account2" type="text">＠<input name="domain2" type="text"></div>
+        <div class="legacy-control" data-label="携帯アドレス"><label for="text">携帯アドレス</label><input name="mobileAddress" type="email"></div>
+
+        <div class="legacy-control" data-label="課程"><label for="text">課程</label><select name="course" style="display: none"><option value="">選択してください</option><option value="master">修士</option></select></div>
+      </fieldset>
+
+      <div class="formbox">
+        <dt class="formbox01">漢字氏名</dt>
+        <dd class="formbox02"><span><div><label for="text">姓：</label><div class="jqTransformInputWrapper"><div><div><input type="text"></div></div></div></div></span><span><div><label for="text">名 ：</label><div class="jqTransformInputWrapper"><div><div><input type="text"></div></div></div></div></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">カナ氏名</dt>
+        <dd class="formbox02"><span><div><label for="text">セイ：</label><div class="jqTransformInputWrapper"><div><div><input type="text"></div></div></div></div></span><span><div><label for="text">メイ ：</label><div class="jqTransformInputWrapper"><div><div><input type="text"></div></div></div></div></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">生年月日</dt>
+        <dd class="formbox02"><span><select style="display: none"><option value="">年</option><option value="2002">2002年</option></select><label for="text">年</label></span><span><select style="display: none"><option value="">月</option><option value="5">5月</option></select><label for="text">月</label></span><span><select style="display: none"><option value="">日</option><option value="18">18日</option></select><label for="text">日</label></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">性別</dt>
+        <dd class="formbox02"><span><input type="radio" value="1"><label for="text">男</label></span><span><input type="radio" value="2"><label for="text">女</label></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">卒業年月</dt>
+        <dd class="formbox02"><span><select style="display: none"><option value="">年</option><option value="2028">2028年</option></select><label for="text">年</label></span><span><select style="display: none"><option value="">月</option><option value="03">03月</option></select><label for="text">月</label></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">電話番号</dt>
+        <dd class="formbox02"><span><input name="gtel1" type="text"></span><label class="hyphen">-</label><span><input name="gtel2" type="text"></span><label class="hyphen">-</label><span><input name="gtel3" type="text"></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">携帯電話番号</dt>
+        <dd class="formbox02"><span><input name="kttel1" type="text"></span><label class="hyphen">-</label><span><input name="kttel2" type="text"></span><label class="hyphen">-</label><span><input name="kttel3" type="text"></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">E-mailアドレス</dt>
+        <dd class="formbox02"><span><input type="text"></span>＠<span><input type="text"></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">E-mailアドレス確認</dt>
+        <dd class="formbox02"><span><input type="text"></span>＠<span><input type="text"></span></dd>
+      </div>
+      <div class="formbox">
+        <dt class="formbox01">携帯アドレス</dt>
+        <dd class="formbox02"><input type="email"></dd>
+      </div>
+
       <button type="submit">手動送信テスト</button>
     </form>
 

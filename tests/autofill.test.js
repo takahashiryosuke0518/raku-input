@@ -6,7 +6,9 @@ const path = require('node:path');
 const {
   normalizeHint,
   collectFieldMetadata,
+  classifyControl,
   classifyField,
+  setFormControlValue,
   fillDocument,
   fillDocumentAsync,
 } = require('../autofill.js');
@@ -35,9 +37,9 @@ test('normalizeHint normalizes width, case, camelCase, whitespace, and separator
 
 test('classifyField recognizes unambiguous hints for each profile field', () => {
   const cases = [
-    [metadata({ labelTexts: ['姓'] }), 'familyName'],
+    [metadata({ labelTexts: ['姓'] }), null],
     [metadata({ placeholder: '苗字（必須）' }), 'familyName'],
-    [metadata({ labelTexts: ['名'] }), 'givenName'],
+    [metadata({ labelTexts: ['名'] }), null],
     [metadata({ ariaLabel: '下の名前' }), 'givenName'],
     [metadata({ labelTexts: ['英字姓'] }), 'familyNameLatin'],
     [metadata({ labelTexts: ['姓（ローマ字）'] }), 'familyNameLatin'],
@@ -57,7 +59,32 @@ test('classifyField recognizes unambiguous hints for each profile field', () => 
   }
 });
 
-test('explicit Japanese labels take precedence over generic autocomplete hints', () => {
+test('classifyField separates kana names and personal contact fields from other purposes', () => {
+  const cases = [
+    ...['セイ', '姓カナ', '姓（カナ）', 'フリガナ（姓）', 'ふりがな（姓）', 'family name kana', 'surname kana']
+      .map((label) => [metadata({ labelTexts: [label] }), 'familyNameKana']),
+    ...['メイ', '名カナ', '名（カナ）', 'フリガナ（名）', 'ふりがな（名）', 'given name kana', 'first name kana']
+      .map((label) => [metadata({ labelTexts: [label] }), 'givenNameKana']),
+    [metadata({ labelTexts: ['カナ氏名'] }), null],
+    [metadata({ labelTexts: ['電話番号'] }), 'phoneNumber'],
+    [metadata({ labelTexts: ['固定電話'] }), 'phoneNumber'],
+    [metadata({ autocomplete: 'tel' }), 'phoneNumber'],
+    [metadata({ labelTexts: ['携帯電話'] }), 'mobilePhone'],
+    [metadata({ labelTexts: ['携帯番号'] }), 'mobilePhone'],
+    [metadata({ labelTexts: ['E-mailアドレス'] }), 'email'],
+    [metadata({ labelTexts: ['メールアドレス'] }), 'email'],
+    [metadata({ labelTexts: ['携帯アドレス'] }), null],
+    [metadata({ labelTexts: ['携帯メール'] }), null],
+  ];
+
+  for (const [fieldMetadata, expected] of cases) {
+    assert.equal(classifyField(fieldMetadata), expected, JSON.stringify(fieldMetadata));
+  }
+});
+
+test('bare surname and given-name labels need group or standard autocomplete context', () => {
+  assert.equal(classifyField(metadata({ labelTexts: ['姓'] })), null);
+  assert.equal(classifyField(metadata({ labelTexts: ['名'] })), null);
   assert.equal(
     classifyField(metadata({
       labelTexts: ['姓'],
@@ -287,6 +314,8 @@ class FakeLabel {
     this.textContent = textContent;
     this.htmlFor = htmlFor;
     this.controls = controls;
+    this.parentElement = null;
+    this.tagName = 'LABEL';
   }
 
   getAttribute(name) {
@@ -304,7 +333,9 @@ class FakeInput {
     this.disabled = Boolean(options.disabled);
     this.readOnly = Boolean(options.readOnly);
     this.parentLabel = options.parentLabel || null;
+    this.parentElement = options.parentElement || null;
     this.effectivelyDisabled = Boolean(options.effectivelyDisabled);
+    this.checked = Boolean(options.checked);
     this.events = [];
     this._value = options.value || '';
     this.failOnSet = Boolean(options.failOnSet);
@@ -341,7 +372,13 @@ class FakeInput {
   }
 
   closest(selector) {
-    return selector === 'label' ? this.parentLabel : null;
+    if (selector === 'label' && this.parentLabel) return this.parentLabel;
+    let current = this.parentElement;
+    while (current) {
+      if (selector === current.tagName.toLowerCase()) return current;
+      current = current.parentElement;
+    }
+    return null;
   }
 
   dispatchEvent(event) {
@@ -352,6 +389,39 @@ class FakeInput {
 
   matches(selector) {
     return selector === ':disabled' ? this.effectivelyDisabled : false;
+  }
+}
+
+class FakeContainer {
+  constructor(tagName, { controls = [], labels = [], parentElement = null, children = [], textContent = '' } = {}) {
+    this.tagName = tagName.toUpperCase();
+    this.controls = controls;
+    this.labels = labels;
+    this.children = children;
+    this.parentElement = parentElement;
+    this.textContent = textContent;
+    this.previousElementSibling = null;
+    for (const control of controls) control.parentElement = this;
+    for (const label of labels) label.parentElement = this;
+    for (let index = 0; index < children.length; index += 1) {
+      children[index].parentElement = this;
+      children[index].previousElementSibling = children[index - 1] || null;
+      children[index].nextElementSibling = children[index + 1] || null;
+    }
+  }
+
+  querySelectorAll(selector) {
+    if (selector === 'label' || selector === 'label[for]') return this.labels;
+    if (selector === 'dt') return this.children.filter((child) => child.tagName === 'DT');
+    if (selector === 'dd') return this.children.filter((child) => child.tagName === 'DD');
+    if (selector === 'input, select, textarea' || selector === 'input, select') return this.controls;
+    if (selector === 'input[type="radio"]') return this.controls.filter((control) => control.type === 'radio');
+    if (selector === 'input, select, textarea') return this.controls;
+    if (selector === 'input[type="tel"], input[type="text"], input[type="email"]') {
+      return this.controls.filter((control) => ['tel', 'text', 'email'].includes(control.type));
+    }
+    if (selector === 'th, td') return this.children.filter((child) => ['TH', 'TD'].includes(child.tagName));
+    return [];
   }
 }
 
@@ -532,7 +602,11 @@ class FakeDocument {
       HTMLTextAreaElement: FakeTextArea,
     };
     this.submitCalls = 0;
-    this.forms = [{ submit: () => { this.submitCalls += 1; } }];
+    this.requestSubmitCalls = 0;
+    this.forms = [{
+      submit: () => { this.submitCalls += 1; },
+      requestSubmit: () => { this.requestSubmitCalls += 1; },
+    }];
 
     for (const control of controls) {
       control.ownerDocument = this;
@@ -556,6 +630,9 @@ class FakeDocument {
       return this.controls.filter((control) => control.tagName === 'TEXTAREA');
     }
     if (selector === 'label[for]') {
+      return this.labels;
+    }
+    if (selector === 'label') {
       return this.labels;
     }
     if (selector === 'div[role="group"][data-date-field-input]') {
@@ -588,6 +665,7 @@ test('collectFieldMetadata reads labels and every supported attribute source', (
 
   assert.deepEqual(collectFieldMetadata(input, document), {
     labelTexts: ['関連ラベル', '親ラベル'],
+    nearLabelTexts: [],
     contextTexts: [],
     fieldsetTexts: [],
     placeholder: '入力例',
@@ -1135,6 +1213,7 @@ test('collectFieldMetadata reads select identity and displayed option text', () 
 
   assert.deepEqual(collectFieldMetadata(select, document), {
     labelTexts: ['性別'],
+    nearLabelTexts: [],
     contextTexts: [],
     placeholder: '',
     name: 'sex',
@@ -1151,8 +1230,8 @@ test('collectFieldMetadata reads select identity and displayed option text', () 
 
 test('collected label, placeholder, name, id, aria-label, and autocomplete can drive classification', () => {
   const cases = [
-    [new FakeInput({ id: 'a' }), [new FakeLabel('姓', 'a')], 'familyName'],
-    [new FakeInput({}, { parentLabel: new FakeLabel('名') }), [], 'givenName'],
+    [new FakeInput({ id: 'a' }), [new FakeLabel('姓', 'a')], null],
+    [new FakeInput({}, { parentLabel: new FakeLabel('名') }), [], null],
     [new FakeInput({ placeholder: 'last name' }), [], 'familyNameLatin'],
     [new FakeInput({ name: 'first_name' }), [], 'givenNameLatin'],
     [new FakeInput({ id: 'surname' }), [], 'familyNameLatin'],
@@ -1168,7 +1247,6 @@ test('collected label, placeholder, name, id, aria-label, and autocomplete can d
 
 test('classifyField rejects unrelated purposes even when they contain name characters', () => {
   const unrelated = [
-    'email',
     'address',
     'company',
     '会社名',
@@ -1180,20 +1258,1051 @@ test('classifyField rejects unrelated purposes even when they contain name chara
   for (const hint of unrelated) {
     assert.equal(classifyField(metadata({ labelTexts: [hint] })), null);
   }
+  assert.equal(classifyField(metadata({ labelTexts: ['email'] })), 'email');
+});
+
+test('split date selects resolve the profile meaning before year month and day components', () => {
+  const controls = [];
+  const labels = [];
+  const addSelect = (name, label, values) => {
+    const id = `field-${controls.length}`;
+    const select = new FakeSelect({ id, name }, values.map(([value, text]) => new FakeOption(value, text)));
+    controls.push(select);
+    labels.push(new FakeLabel(label, id));
+    return select;
+  };
+  const years = [['2002', '2002年'], ['2026', '2026年'], ['2028', '2028年']];
+  const months = [['4', '4月'], ['5', '05月'], ['3', '3月']];
+  const days = [['18', '18日'], ['5', '5日']];
+  const birthYear = addSelect('birthYear', '年', years);
+  const birthMonth = addSelect('birthdayMonth', '月', months);
+  const birthDay = addSelect('birthDay', '日', days);
+  const enrollmentYear = addSelect('year', '入学年月 年', years);
+  const enrollmentMonth = addSelect('month', '入学年月 月', months);
+  const graduationYear = addSelect('year', '卒業年月 年', years);
+  const graduationMonth = addSelect('month', '卒業年月 月', months);
+  const labStartYear = addSelect('year', '研究室所属開始年月 年', years);
+  const labStartMonth = addSelect('month', '研究室所属開始年月 月', months);
+  const labEndYear = addSelect('year', '研究室所属終了年月 年', years);
+  const labEndMonth = addSelect('month', '研究室所属終了年月 月', months);
+  const ambiguousYear = addSelect('year', '年', years);
+  const document = new FakeDocument(controls, labels);
+
+  assert.deepEqual(fillDocument(document, {
+    birthDate: '2002-05-18',
+    enrollmentMonth: '2026-04',
+    graduationMonth: '2028-03',
+    laboratoryStartMonth: '2026-04',
+    laboratoryEndMonth: '2028-03',
+  }), { filledCount: 11, failedCount: 0 });
+  assert.deepEqual(
+    [birthYear.value, birthMonth.value, birthDay.value],
+    ['2002', '5', '18'],
+  );
+  assert.deepEqual(
+    [enrollmentYear.value, enrollmentMonth.value, graduationYear.value, graduationMonth.value],
+    ['2026', '4', '2028', '3'],
+  );
+  assert.deepEqual(
+    [labStartYear.value, labStartMonth.value, labEndYear.value, labEndMonth.value],
+    ['2026', '4', '2028', '3'],
+  );
+  assert.equal(ambiguousYear.value, '');
+  for (const control of controls.slice(0, 11)) {
+    assert.deepEqual(control.events.map(({ type }) => type), ['input', 'change']);
+  }
+});
+
+test('collectFieldMetadata uses one nearby label in a small wrapper and ignores ambiguous wrappers', () => {
+  const oneInput = new FakeInput({ id: 'one', type: 'text' });
+  const oneLabel = new FakeLabel('姓：', 'text');
+  const oneWrapper = new FakeContainer('div', { controls: [oneInput], labels: [oneLabel] });
+  const twoInputs = [new FakeInput({}), new FakeInput({})];
+  const twoLabels = [new FakeLabel('姓：'), new FakeLabel('名：')];
+  const ambiguousWrapper = new FakeContainer('li', { controls: twoInputs, labels: twoLabels });
+  const document = new FakeDocument([oneInput, ...twoInputs], [oneLabel, ...twoLabels]);
+
+  assert.deepEqual(collectFieldMetadata(oneInput, document).nearLabelTexts, ['姓：']);
+  assert.equal(classifyField(collectFieldMetadata(oneInput, document)), null);
+  assert.deepEqual(collectFieldMetadata(twoInputs[0], document).nearLabelTexts, []);
+  assert.deepEqual(collectFieldMetadata(twoInputs[1], document).nearLabelTexts, []);
+  assert.ok(oneWrapper && ambiguousWrapper);
+});
+
+test('collectFieldMetadata reads only paired dt/dd and th/td labels', () => {
+  const definitionInput = new FakeInput({});
+  const term = new FakeContainer('dt', { textContent: '姓' });
+  const definition = new FakeContainer('dd', { controls: [definitionInput] });
+  new FakeContainer('dl', { children: [term, definition] });
+
+  const tableInput = new FakeInput({});
+  const header = new FakeContainer('th', { textContent: '名' });
+  const cell = new FakeContainer('td', { controls: [tableInput] });
+  new FakeContainer('tr', { children: [header, cell] });
+  const broadInput = new FakeInput({});
+  const broad = new FakeContainer('form', {
+    controls: [broadInput],
+    textContent: '姓 名 電話番号',
+  });
+  const document = new FakeDocument([definitionInput, tableInput, broadInput]);
+
+  assert.deepEqual(collectFieldMetadata(definitionInput, document).nearLabelTexts, []);
+  assert.deepEqual(collectFieldMetadata(definitionInput, document).contextTexts, ['姓']);
+  assert.deepEqual(collectFieldMetadata(tableInput, document).nearLabelTexts, ['名']);
+  assert.deepEqual(collectFieldMetadata(broadInput, document).nearLabelTexts, []);
+});
+
+test('a unique dt/dd context is required before a group term can label its controls', () => {
+  const input = new FakeSelect({}, [new FakeOption('2028', '2028年')]);
+  const term = new FakeContainer('dt', { textContent: '生年月日' });
+  const firstDefinition = new FakeContainer('dd', { controls: [input] });
+  const secondDefinition = new FakeContainer('dd');
+  const wrapper = new FakeContainer('div', { children: [term, firstDefinition, secondDefinition] });
+  wrapper.controls = [input];
+  const document = new FakeDocument([input]);
+
+  assert.deepEqual(collectFieldMetadata(input, document).contextTexts, []);
+  assert.equal(classifyControl(metadata({ nearLabelTexts: ['年'], tagName: 'select' })), null);
+  assert.ok(wrapper);
+});
+
+test('formbox definition terms and adjacent sibling labels identify split profile controls', () => {
+  const family = new FakeInput({ type: 'text' });
+  const given = new FakeInput({ type: 'text' });
+  const familyLabel = new FakeLabel('姓：', 'unmatched');
+  const givenLabel = new FakeLabel('名：', 'unmatched');
+  const nameTerm = new FakeContainer('dt', { textContent: '漢字氏名' });
+  const nameDefinition = new FakeContainer('dd', {
+    controls: [family, given],
+    labels: [familyLabel, givenLabel],
+    children: [familyLabel, family, givenLabel, given],
+  });
+  const nameGroup = new FakeContainer('div', { children: [nameTerm, nameDefinition] });
+  nameGroup.controls = [family, given];
+  nameGroup.className = 'formbox';
+
+  let displayedYear = '';
+  const year = new FakeSelect({}, [new FakeOption('2002', '2002年')], {
+    onEvent(event, control) {
+      if (event.type === 'change') {
+        displayedYear = control.options[control.selectedIndex]?.textContent || '';
+      }
+    },
+  });
+  const month = new FakeSelect({}, [new FakeOption('5', '5月')]);
+  const day = new FakeSelect({}, [new FakeOption('18', '18日')]);
+  const birthTerm = new FakeContainer('dt', { textContent: '生年月日' });
+  const birthLabels = ['年', '月', '日'].map((text) => new FakeLabel(text, 'unmatched'));
+  const birthDefinition = new FakeContainer('dd', {
+    controls: [year, month, day],
+    labels: birthLabels,
+    children: [birthLabels[0], year, birthLabels[1], month, birthLabels[2], day],
+  });
+  const birthGroup = new FakeContainer('div', { children: [birthTerm, birthDefinition] });
+  birthGroup.controls = [year, month, day];
+  birthGroup.className = 'formbox';
+  const document = new FakeDocument([family, given, year, month, day], [
+    familyLabel, givenLabel, ...birthLabels,
+  ]);
+
+  assert.equal(family.previousElementSibling, familyLabel);
+  assert.deepEqual(collectFieldMetadata(family, document).nearLabelTexts, ['姓：']);
+  assert.deepEqual(collectFieldMetadata(family, document).contextTexts, ['漢字氏名']);
+  assert.deepEqual(collectFieldMetadata(year, document).nearLabelTexts, ['年']);
+  assert.deepEqual(collectFieldMetadata(year, document).contextTexts, ['生年月日']);
+  assert.ok(nameGroup && birthGroup);
+  assert.deepEqual(fillDocument(document, {
+    familyName: '山田',
+    givenName: '太郎',
+    birthDate: '2002-05-18',
+  }), { filledCount: 5, failedCount: 0 });
+  assert.equal(family.value, '山田');
+  assert.equal(given.value, '太郎');
+  assert.deepEqual([year.value, month.value, day.value], ['2002', '5', '18']);
+  assert.deepEqual([year.selectedIndex, month.selectedIndex, day.selectedIndex], [0, 0, 0]);
+  assert.equal(year.options[year.selectedIndex].textContent, '2002年');
+  assert.equal(displayedYear, '2002年');
+  assert.deepEqual(year.events.map(({ type }) => type), ['input', 'change']);
+});
+
+test('legacy formbox metadata combines unique dt/dd context with deep local labels for every split field', () => {
+  const allControls = [];
+  const allLabels = [];
+  const boxes = [];
+
+  function makeField(labelText, control, position = 'before') {
+    const label = new FakeLabel(labelText, 'broken-for');
+    const inner = new FakeContainer('div', { controls: [control] });
+    const middle = new FakeContainer('div', { children: [inner] });
+    middle.controls = [control];
+    const spanChildren = position === 'before' ? [label, middle] : [middle, label];
+    const span = new FakeContainer('span', { labels: [label], children: spanChildren });
+    span.controls = [control];
+    allControls.push(control);
+    allLabels.push(label);
+    return { control, label, span };
+  }
+
+  function makeBox(heading, fields, textContent = '') {
+    const term = new FakeContainer('dt', { textContent: heading });
+    const definition = new FakeContainer('dd', {
+      children: fields.map((field) => field.span),
+      textContent,
+    });
+    definition.controls = fields.map((field) => field.control);
+    definition.labels = fields.map((field) => field.label);
+    const box = new FakeContainer('div', { children: [term, definition] });
+    box.controls = definition.controls;
+    box.labels = definition.labels;
+    boxes.push(box);
+    return fields;
+  }
+
+  const kanji = makeBox('漢字氏名', [
+    makeField('姓：', new FakeInput({ type: 'text' })),
+    makeField('名：', new FakeInput({ type: 'text' })),
+  ]);
+  const kana = makeBox('カナ氏名', [
+    makeField('セイ：', new FakeInput({ type: 'text' })),
+    makeField('メイ：', new FakeInput({ type: 'text' })),
+  ]);
+  const birth = makeBox('生年月日', [
+    makeField('年', new FakeSelect({ style: 'display: none' }, [new FakeOption('', '年'), new FakeOption('2002', '2002年')]), 'after'),
+    makeField('月', new FakeSelect({ style: 'display: none' }, [new FakeOption('', '月'), new FakeOption('5', '5月')]), 'after'),
+    makeField('日', new FakeSelect({ style: 'display: none' }, [new FakeOption('', '日'), new FakeOption('18', '18日')]), 'after'),
+  ]);
+  const gender = makeBox('性別', [
+    makeField('男', new FakeInput({ type: 'radio', name: 'gender', value: '1' }), 'after'),
+    makeField('女', new FakeInput({ type: 'radio', name: 'gender', value: '2' }), 'after'),
+  ]);
+  const graduation = makeBox('卒業年月', [
+    makeField('年', new FakeSelect({ style: 'display: none' }, [new FakeOption('', '年'), new FakeOption('2028', '2028年')]), 'after'),
+    makeField('月', new FakeSelect({ style: 'display: none' }, [new FakeOption('', '月'), new FakeOption('03', '03月')]), 'after'),
+  ]);
+  const fixed = makeBox('電話番号', [1, 2, 3].map(() => makeField('', new FakeInput({ type: 'text' }))), '--');
+  const mobile = makeBox('携帯電話番号', [1, 2, 3].map(() => makeField('', new FakeInput({ type: 'text' }))), '--');
+  const mail = makeBox('E-mailアドレス', [
+    makeField('', new FakeInput({ type: 'text' })),
+    makeField('', new FakeInput({ type: 'text' })),
+  ], '＠');
+  const mailConfirm = makeBox('E-mailアドレス確認', [
+    makeField('', new FakeInput({ type: 'text' })),
+    makeField('', new FakeInput({ type: 'text' })),
+  ], '＠');
+  const mobileEmail = makeBox('携帯アドレス', [
+    makeField('携帯アドレス', new FakeInput({ type: 'email' })),
+  ]);
+  const document = new FakeDocument(allControls, allLabels);
+
+  const expected = [
+    ...kanji.map(({ control }, index) => [control, index ? 'givenName' : 'familyName', null]),
+    ...kana.map(({ control }, index) => [control, index ? 'givenNameKana' : 'familyNameKana', null]),
+    ...birth.map(({ control }, index) => [control, 'birthDate', ['year', 'month', 'day'][index]]),
+    ...gender.map(({ control }) => [control, 'gender', null]),
+    ...graduation.map(({ control }, index) => [control, 'graduationMonth', index ? 'month' : 'year']),
+    ...fixed.map(({ control }) => [control, 'phoneNumber', null]),
+    ...mobile.map(({ control }) => [control, 'mobilePhone', null]),
+    ...mail.map(({ control }) => [control, 'email', null]),
+    ...mailConfirm.map(({ control }) => [control, 'email', null]),
+  ];
+  for (const [control, profileKey, segment] of expected) {
+    const metadata = collectFieldMetadata(control, document);
+    assert.ok(metadata.contextTexts.length === 1, `missing unique group context for ${profileKey}`);
+    assert.deepEqual(classifyControl(metadata), { profileKey, segment });
+  }
+  for (const component of ['年', '月', '日']) {
+    assert.equal(classifyControl(metadata({ nearLabelTexts: [component], tagName: 'select' })), null);
+  }
+  assert.equal(classifyControl(collectFieldMetadata(mobileEmail[0].control, document)), null);
+  assert.ok(boxes.length > 0);
+  assert.deepEqual(graduation.map(({ control }) => control.value), ['', '']);
+
+  assert.deepEqual(fillDocument(document, {
+    familyName: '山田',
+    givenName: '太郎',
+    familyNameKana: 'ヤマダ',
+    givenNameKana: 'タロウ',
+    birthDate: '2002-05-18',
+    gender: '男性',
+    graduationMonth: '2028-03',
+    phoneNumber: '03-1111-2222',
+    mobilePhone: '080-2222-3333',
+    email: 'sample@example.com',
+  }), { filledCount: 20, failedCount: 0 });
+  assert.deepEqual(kanji.map(({ control }) => control.value), ['山田', '太郎']);
+  assert.deepEqual(kana.map(({ control }) => control.value), ['ヤマダ', 'タロウ']);
+  assert.deepEqual(birth.map(({ control }) => control.value), ['2002', '5', '18']);
+  assert.deepEqual(birth.map(({ control }) => control.selectedIndex), [1, 1, 1]);
+  assert.deepEqual(birth.map(({ control }) => control.events.map(({ type }) => type)), [
+    ['input', 'change'], ['input', 'change'], ['input', 'change'],
+  ]);
+  assert.equal(gender[0].control.checked, true);
+  assert.equal(gender[1].control.checked, false);
+  assert.deepEqual(graduation.map(({ control }) => control.value), ['2028', '03']);
+  assert.deepEqual(graduation.map(({ control }) => control.selectedIndex), [1, 1]);
+  assert.deepEqual(fixed.map(({ control }) => control.value), ['03', '1111', '2222']);
+  assert.deepEqual(mobile.map(({ control }) => control.value), ['080', '2222', '3333']);
+  assert.deepEqual(mail.map(({ control }) => control.value), ['sample', 'example.com']);
+  assert.deepEqual(mailConfirm.map(({ control }) => control.value), ['sample', 'example.com']);
+  assert.equal(mobileEmail[0].control.value, '');
+});
+
+test('input-wrapper sibling labels and a seventh-level dt/dd group classify kanji and kana names', () => {
+  const controls = [];
+  const labels = [];
+  const boxes = [];
+
+  function makeNameField(labelText) {
+    const input = new FakeInput({ type: 'text' });
+    const inner = new FakeContainer('div', { controls: [input] });
+    const outer = new FakeContainer('div', { children: [inner] });
+    outer.controls = [input];
+    const inputWrapper = new FakeContainer('div', { children: [outer] });
+    inputWrapper.controls = [input];
+    const label = new FakeLabel(labelText, 'unmatched');
+    const field = new FakeContainer('div', { labels: [label], children: [label, inputWrapper] });
+    field.controls = [input];
+    const line = new FakeContainer('span', { children: [field] });
+    line.controls = [input];
+    controls.push(input);
+    labels.push(label);
+    return { input, label, line };
+  }
+
+  function makeNameGroup(heading, firstLabel, secondLabel) {
+    const fields = [makeNameField(firstLabel), makeNameField(secondLabel)];
+    const term = new FakeContainer('dt', { textContent: heading });
+    const definition = new FakeContainer('dd', {
+      children: fields.map((field) => field.line),
+      labels: fields.map((field) => field.label),
+    });
+    definition.controls = fields.map((field) => field.input);
+    const group = new FakeContainer('div', { children: [term, definition] });
+    group.controls = definition.controls;
+    boxes.push(group);
+    return fields;
+  }
+
+  const kanji = makeNameGroup('漢字氏名', '姓：', '名 ：');
+  const kana = makeNameGroup('カナ氏名', 'セイ：', 'メイ ：');
+  const document = new FakeDocument(controls, labels);
+  const expected = [
+    [kanji[0].input, '姓：', '漢字氏名', 'familyName'],
+    [kanji[1].input, '名 ：', '漢字氏名', 'givenName'],
+    [kana[0].input, 'セイ：', 'カナ氏名', 'familyNameKana'],
+    [kana[1].input, 'メイ ：', 'カナ氏名', 'givenNameKana'],
+  ];
+
+  for (const [control, label, heading, profileKey] of expected) {
+    const fieldMetadata = collectFieldMetadata(control, document);
+    assert.deepEqual(fieldMetadata.nearLabelTexts, [label]);
+    assert.deepEqual(fieldMetadata.contextTexts, [heading]);
+    assert.deepEqual(classifyControl(fieldMetadata), { profileKey, segment: null });
+  }
+  assert.deepEqual(fillDocument(document, {
+    familyName: '山田',
+    givenName: '太郎',
+    familyNameKana: 'ヤマダ',
+    givenNameKana: 'タロウ',
+  }), { filledCount: 4, failedCount: 0 });
+  assert.deepEqual(controls.map((control) => control.value), ['山田', '太郎', 'ヤマダ', 'タロウ']);
+  assert.equal(boxes.length, 2);
+});
+
+test('a preceding label is not shared with controls inside a multi-control wrapper', () => {
+  const first = new FakeInput({ type: 'text' });
+  const second = new FakeInput({ type: 'text' });
+  const label = new FakeLabel('姓：', 'unmatched');
+  const wrapper = new FakeContainer('div', { controls: [first, second], children: [first, second] });
+  assert.equal(first.parentElement, wrapper);
+  const term = new FakeContainer('dt', { textContent: '漢字氏名' });
+  const definition = new FakeContainer('dd', { labels: [label], children: [label, wrapper] });
+  definition.controls = [first, second];
+  assert.equal(wrapper.previousElementSibling, label);
+  const group = new FakeContainer('div', { children: [term, definition] });
+  group.controls = [first, second];
+  const document = new FakeDocument([first, second], [label]);
+
+  for (const control of [first, second]) {
+    assert.deepEqual(collectFieldMetadata(control, document).nearLabelTexts, []);
+    assert.equal(classifyControl(collectFieldMetadata(control, document)), null);
+  }
+});
+
+test('hidden birthday and graduation selects use identical native updates with padded numeric options', () => {
+  const controls = [];
+  const labels = [];
+  const rendered = new Map();
+
+  function selectField(heading, component, options, profileKey, part) {
+    const select = new FakeSelect({ class: 'jqTransformHidden', style: 'display: none' }, options, {
+      value: '',
+      onEvent(event, control) {
+        if (event.type === 'change') {
+          rendered.set(`${profileKey}.${part}`, control.options[control.selectedIndex]?.textContent || '');
+        }
+      },
+    });
+    const label = new FakeLabel(component, 'unmatched');
+    const wrapper = new FakeContainer('span', { controls: [select], labels: [label], children: [select, label] });
+    const term = new FakeContainer('dt', { textContent: heading });
+    const definition = new FakeContainer('dd', { children: [wrapper] });
+    definition.controls = [select];
+    definition.labels = [label];
+    const group = new FakeContainer('div', { children: [term, definition] });
+    group.controls = [select];
+    controls.push(select);
+    labels.push(label);
+    return select;
+  }
+
+  const birthday = [
+    selectField('生年月日', '年', [new FakeOption('', '年'), new FakeOption('2002', '2002')], 'birthDate', 'year'),
+    selectField('生年月日', '月', [new FakeOption('', '月'), new FakeOption('05', '05')], 'birthDate', 'month'),
+    selectField('生年月日', '日', [
+      new FakeOption('', '日'), ...Array.from({ length: 31 }, (_, index) => {
+        const value = String(index + 1).padStart(2, '0');
+        return new FakeOption(value, value);
+      }),
+    ], 'birthDate', 'day'),
+  ];
+  const graduation = [
+    selectField('卒業年月', '年', [new FakeOption('', '年'), new FakeOption('2028', '2028')], 'graduationMonth', 'year'),
+    selectField('卒業年月', '月', [new FakeOption('', '月'), new FakeOption('03', '03')], 'graduationMonth', 'month'),
+  ];
+  const document = new FakeDocument(controls, labels);
+
+  for (const [control, profileKey, segment] of [
+    ...birthday.map((control, index) => [control, 'birthDate', ['year', 'month', 'day'][index]]),
+    ...graduation.map((control, index) => [control, 'graduationMonth', ['year', 'month'][index]]),
+  ]) {
+    const classification = classifyControl(collectFieldMetadata(control, document));
+    assert.deepEqual(classification, { profileKey, segment });
+  }
+
+  assert.deepEqual(fillDocument(document, {
+    birthDate: '2002-05-05',
+    graduationMonth: '2028-03',
+  }), { filledCount: 5, failedCount: 0 });
+  assert.deepEqual(birthday.map((control) => [control.value, control.selectedIndex]), [
+    ['2002', 1], ['05', 1], ['05', 5],
+  ]);
+  assert.deepEqual(graduation.map((control) => [control.value, control.selectedIndex]), [
+    ['2028', 1], ['03', 1],
+  ]);
+  assert.deepEqual(birthday.map((control) => control.events.map(({ type }) => type)), [
+    ['input', 'change'], ['input', 'change'], ['input', 'change'],
+  ]);
+  assert.deepEqual(graduation.map((control) => control.events.map(({ type }) => type)), [
+    ['input', 'change'], ['input', 'change'],
+  ]);
+  assert.deepEqual([...rendered.entries()], [
+    ['birthDate.year', '2002'], ['birthDate.month', '05'], ['birthDate.day', '05'],
+    ['graduationMonth.year', '2028'], ['graduationMonth.month', '03'],
+  ]);
+});
+
+test('jqTransform select views sync only when a unique wrapper and option map are proven', () => {
+  let clickCalls = 0;
+  function makeSelect(options, currentText = '-▼-', { wrapperCount = 1, mapIndexes } = {}) {
+    const select = new FakeSelect({ type: 'select-one' }, options);
+    let displayText = currentText;
+    let displayWrites = 0;
+    let classWrites = 0;
+    const display = {
+      tagName: 'SPAN',
+      get textContent() { return displayText; },
+      set textContent(value) { displayWrites += 1; displayText = value; },
+    };
+    const bar = { tagName: 'DIV' };
+    display.parentElement = bar;
+    const open = {
+      tagName: 'A',
+      className: 'jqTransformSelectOpen',
+      previousElementSibling: display,
+      parentElement: bar,
+      getAttribute(name) { return name === 'class' ? this.className : null; },
+      click() { clickCalls += 1; },
+    };
+    bar.children = [display, open];
+    const links = options.map((option, index) => {
+      const classes = new Set(index === 0 ? ['selected'] : []);
+      return {
+        tagName: 'A',
+        textContent: option.textContent,
+        getAttribute(name) {
+          if (name === 'index') return String(mapIndexes ? mapIndexes[index] : index);
+          return null;
+        },
+        classList: {
+          contains(name) { return classes.has(name); },
+          add(name) { classWrites += 1; classes.add(name); },
+          remove(name) { classWrites += 1; classes.delete(name); },
+        },
+        click() { clickCalls += 1; },
+        get selected() { return classes.has('selected'); },
+      };
+    });
+    const list = { tagName: 'UL' };
+    list.children = links;
+    const wrappers = Array.from({ length: wrapperCount }, () => ({
+      tagName: 'DIV',
+      className: 'jqTransformSelectWrapper',
+      classList: { contains(name) { return name === 'jqTransformSelectWrapper'; } },
+      querySelectorAll(selector) {
+        if (selector === 'input, select, textarea') return [select];
+        if (selector === 'a.jqTransformSelectOpen') return [open];
+        if (selector === 'div > span') return [display];
+        if (selector === 'ul') return [list];
+        if (selector === 'ul > li > a') return links;
+        if (selector === 'a') return [open, ...links];
+        return [];
+      },
+    }));
+    for (let index = 0; index < wrappers.length - 1; index += 1) {
+      wrappers[index].parentElement = wrappers[index + 1];
+    }
+    select.parentElement = wrappers[0];
+    return {
+      select,
+      display,
+      links,
+      wrappers,
+      get displayWrites() { return displayWrites; },
+      get classWrites() { return classWrites; },
+      get displayText() { return displayText; },
+    };
+  }
+
+  const birthdayOptions = [
+    new FakeOption('', '-▼-'), new FakeOption('2002', '2002年'),
+  ];
+  const birth = makeSelect(birthdayOptions);
+  // jqTransform's open anchor is outside the option list: wrapper-wide anchors
+  // are N + 1, while only the N anchors under UL correspond to native options.
+  assert.equal(birth.wrappers[0].querySelectorAll('a').length, birthdayOptions.length + 1);
+  assert.equal(birth.wrappers[0].querySelectorAll('ul > li > a').length, birthdayOptions.length);
+  const birthMonth = makeSelect([new FakeOption('', ''), new FakeOption('05', '05')]);
+  const birthDayOptions = [new FakeOption('', '')];
+  for (let day = 1; day <= 31; day += 1) {
+    const value = String(day).padStart(2, '0');
+    birthDayOptions.push(new FakeOption(value, value));
+  }
+  const birthDay = makeSelect(birthDayOptions);
+  const graduation = makeSelect([
+    new FakeOption('', '-▼-'), new FakeOption('2028', '2028年'),
+  ], '2028年');
+  const eventSynced = makeSelect([
+    new FakeOption('', '-▼-'), new FakeOption('03', '03月'),
+  ]);
+  eventSynced.select.onEvent = (event) => {
+    if (event.type === 'change') eventSynced.display.textContent = '03月';
+  };
+  const standard = new FakeSelect({}, [new FakeOption('', ''), new FakeOption('05', '05月')]);
+  const ambiguousWrapper = makeSelect([
+    new FakeOption('', '-▼-'), new FakeOption('18', '18日'),
+  ], '-▼-', { wrapperCount: 2 });
+  const ambiguousOptions = makeSelect([
+    new FakeOption('', '-▼-'), new FakeOption('05', '05月'),
+  ], '-▼-', { mapIndexes: [0, 0] });
+  const controls = [birth.select, birthMonth.select, birthDay.select, graduation.select, eventSynced.select, standard,
+    ambiguousWrapper.select, ambiguousOptions.select];
+  const document = new FakeDocument(controls);
+
+  assert.equal(setFormControlValue(birth.select, { profileKey: 'birthDate', segment: 'year' }, '2002', document), true);
+  assert.deepEqual([birth.select.value, birth.select.selectedIndex], ['2002', 1]);
+  assert.equal(birth.displayText, '2002年');
+  assert.equal(birth.links[1].selected, true);
+  assert.deepEqual(birth.select.events.map(({ type }) => type), ['input', 'change']);
+
+  for (const [field, segment, value] of [
+    [birthMonth, 'month', '05'], [birthDay, 'day', '18'],
+  ]) {
+    assert.equal(setFormControlValue(field.select, { profileKey: 'birthDate', segment }, value, document), true);
+    assert.equal(field.select.value, value);
+    assert.equal(field.displayText, value);
+    assert.equal(field.links[field.select.selectedIndex].selected, true);
+    assert.deepEqual(field.select.events.map(({ type }) => type), ['input', 'change']);
+  }
+
+  assert.equal(setFormControlValue(graduation.select, { profileKey: 'graduationMonth', segment: 'year' }, '2028', document), true);
+  assert.equal(graduation.displayText, '2028年');
+  assert.equal(graduation.displayWrites, 0);
+  assert.equal(graduation.classWrites, 0);
+
+  assert.equal(setFormControlValue(eventSynced.select, { profileKey: 'graduationMonth', segment: 'month' }, '03', document), true);
+  assert.equal(eventSynced.displayText, '03月');
+  assert.equal(eventSynced.displayWrites, 1);
+  assert.equal(eventSynced.classWrites, 0);
+
+  assert.equal(setFormControlValue(standard, { profileKey: 'birthDate', segment: 'month' }, '05', document), true);
+  assert.equal(standard.value, '05');
+  assert.equal(setFormControlValue(ambiguousWrapper.select, { profileKey: 'birthDate', segment: 'day' }, '18', document), true);
+  assert.equal(ambiguousWrapper.displayText, '-▼-');
+  assert.equal(ambiguousWrapper.displayWrites, 0);
+  assert.equal(setFormControlValue(ambiguousOptions.select, { profileKey: 'birthDate', segment: 'month' }, '05', document), true);
+  assert.equal(ambiguousOptions.displayText, '-▼-');
+  assert.equal(ambiguousOptions.displayWrites, 0);
+  assert.equal(clickCalls, 0);
+});
+
+test('birth date select order overrides the preceding unit label in one three-select DD', () => {
+  const controls = [];
+  const labels = [];
+  const rendered = [];
+  const year = new FakeSelect({ class: 'jqTransformHidden', name: 'ybirth' }, [
+    new FakeOption('', ''), new FakeOption('2002', '2002'),
+  ], { onEvent(event, control) { if (event.type === 'change') rendered.push(control.value); } });
+  const month = new FakeSelect({ class: 'jqTransformHidden', name: 'mbirth' }, [
+    new FakeOption('', ''), new FakeOption('05', '05'),
+  ], { onEvent(event, control) { if (event.type === 'change') rendered.push(control.value); } });
+  const dayOptions = [new FakeOption('', '')];
+  for (let day = 1; day <= 31; day += 1) {
+    const value = String(day).padStart(2, '0');
+    dayOptions.push(new FakeOption(value, value));
+  }
+  const day = new FakeSelect({ class: 'jqTransformHidden', name: 'dbirth' }, dayOptions, {
+    onEvent(event, control) { if (event.type === 'change') rendered.push(control.value); },
+  });
+  const unitLabels = ['年', '月', '日'].map((text) => new FakeLabel(text, 'unmatched'));
+  const wrappers = [year, month, day].map((select) => {
+    const wrapper = new FakeContainer('span', { children: [select] });
+    wrapper.controls = [select];
+    controls.push(select);
+    return wrapper;
+  });
+  const term = new FakeContainer('dt', { textContent: '生年月日' });
+  const definition = new FakeContainer('dd', {
+    labels: unitLabels,
+    children: [wrappers[0], unitLabels[0], wrappers[1], unitLabels[1], wrappers[2], unitLabels[2]],
+    textContent: '年 月 日',
+  });
+  definition.controls = controls;
+  const group = new FakeContainer('div', { children: [term, definition] });
+  group.controls = controls;
+  labels.push(...unitLabels);
+  const document = new FakeDocument(controls, labels);
+
+  const expected = [
+    [year, 'year'], [month, 'month'], [day, 'day'],
+  ];
+  for (const [index, [control, segment]] of expected.entries()) {
+    const fieldMetadata = collectFieldMetadata(control, document);
+    assert.deepEqual(fieldMetadata.contextTexts, ['生年月日']);
+    assert.deepEqual(fieldMetadata.nearLabelTexts, []);
+    assert.equal(fieldMetadata.definitionSelectCount, 3);
+    assert.equal(fieldMetadata.definitionSelectIndex, index);
+    assert.deepEqual(fieldMetadata.definitionSelectSegments, ['year', 'month', 'day']);
+    assert.deepEqual(classifyControl(fieldMetadata), { profileKey: 'birthDate', segment });
+  }
+  assert.deepEqual(fillDocument(document, { birthDate: '2002-05-05' }), {
+    filledCount: 3,
+    failedCount: 0,
+  });
+  assert.deepEqual([year, month, day].map((select) => [select.value, select.selectedIndex]), [
+    ['2002', 1], ['05', 1], ['05', 5],
+  ]);
+  assert.deepEqual(rendered, ['2002', '05', '05']);
+});
+
+test('nested select wrappers use their unique trailing year month day labels', () => {
+  const controls = [];
+  const labels = ['年', '月', '日'].map((text) => new FakeLabel(text, 'unmatched'));
+  const year = new FakeSelect({ name: 'part-a' }, [
+    new FakeOption('', ''), new FakeOption('2003', '2003'),
+  ]);
+  const month = new FakeSelect({ name: 'part-b' }, [
+    new FakeOption('', ''), new FakeOption('05', '05'),
+  ]);
+  const day = new FakeSelect({ name: 'part-c' }, [
+    new FakeOption('', ''), new FakeOption('18', '18'),
+  ]);
+  const wrappers = [year, month, day].map((select) => {
+    const wrapper = new FakeContainer('div', { controls: [select], children: [select] });
+    controls.push(select);
+    return wrapper;
+  });
+  const nestedRow = new FakeContainer('div', {
+    controls,
+    labels,
+    children: [wrappers[0], labels[0], wrappers[1], labels[1], wrappers[2], labels[2]],
+  });
+  const term = new FakeContainer('dt', { textContent: '生年月日' });
+  const definition = new FakeContainer('dd', {
+    controls,
+    labels,
+    children: [nestedRow],
+  });
+  new FakeContainer('div', { controls, children: [term, definition] });
+  const document = new FakeDocument(controls, labels);
+
+  for (const [index, [control, segment]] of [
+    [year, 'year'], [month, 'month'], [day, 'day'],
+  ].entries()) {
+    const fieldMetadata = collectFieldMetadata(control, document);
+    assert.equal(fieldMetadata.definitionSelectCount, 3);
+    assert.equal(fieldMetadata.definitionSelectIndex, index);
+    assert.deepEqual(fieldMetadata.definitionSelectSegments, ['year', 'month', 'day']);
+    assert.deepEqual(classifyControl(fieldMetadata), { profileKey: 'birthDate', segment });
+  }
+
+  assert.deepEqual(fillDocument(document, { birthDate: '2003-05-18' }), {
+    filledCount: 3,
+    failedCount: 0,
+  });
+  assert.deepEqual([year, month, day].map((select) => [select.value, select.selectedIndex]), [
+    ['2003', 1], ['05', 1], ['18', 1],
+  ]);
+});
+
+test('one email DD with two @ pairs fills the address and its confirmation, not mobile address', () => {
+  const controls = [];
+  const labels = [];
+  function makeBox(heading, separatorText) {
+    const inputs = Array.from({ length: 4 }, () => new FakeInput({ type: 'text' }));
+    const wrappers = inputs.map((input) => {
+      const wrapper = new FakeContainer('span', { children: [input] });
+      wrapper.controls = [input];
+      controls.push(input);
+      return wrapper;
+    });
+    const term = new FakeContainer('dt', { textContent: heading });
+    const definition = new FakeContainer('dd', {
+      children: [wrappers[0], wrappers[1], wrappers[2], wrappers[3]],
+      textContent: separatorText,
+    });
+    definition.controls = inputs;
+    const group = new FakeContainer('div', { children: [term, definition] });
+    group.controls = inputs;
+    return inputs;
+  }
+
+  const email = makeBox('Email address', '@ @');
+  const mobileAddress = makeBox('Mobile address', '@ @');
+  const document = new FakeDocument(controls, labels);
+  for (const input of email) {
+    const fieldMetadata = collectFieldMetadata(input, document);
+    assert.deepEqual(fieldMetadata.contextTexts, ['Email address']);
+    assert.equal(classifyControl(fieldMetadata)?.profileKey, 'email');
+  }
+  for (const input of mobileAddress) {
+    assert.equal(classifyControl(collectFieldMetadata(input, document)), null);
+  }
+
+  assert.deepEqual(fillDocument(document, { email: 'sample@example.com' }), {
+    filledCount: 4,
+    failedCount: 0,
+  });
+  assert.deepEqual(email.map((input) => input.value), [
+    'sample', 'example.com', 'sample', 'example.com',
+  ]);
+  assert.deepEqual(mobileAddress.map((input) => input.value), ['', '', '', '']);
+});
+
+test('three phone inputs in one uniquely labelled group split without relying on visible separators', () => {
+  const controls = [];
+  const labels = [];
+  function makeBox(heading, profileKey) {
+    const term = new FakeContainer('dt', { textContent: heading });
+    const fields = Array.from({ length: 3 }, () => {
+      const input = new FakeInput({ type: 'text' });
+      const inner = new FakeContainer('div', { controls: [input] });
+      const wrapper = new FakeContainer('span', { children: [inner] });
+      wrapper.controls = [input];
+      controls.push(input);
+      return wrapper;
+    });
+    const definition = new FakeContainer('dd', { children: fields, textContent: '' });
+    definition.controls = fields.flatMap((field) => field.controls);
+    const group = new FakeContainer('div', { children: [term, definition] });
+    group.controls = definition.controls;
+    for (const input of definition.controls) {
+      const fieldMetadata = collectFieldMetadata(input, new FakeDocument(controls, labels));
+      assert.equal(classifyControl(fieldMetadata)?.profileKey, profileKey);
+      assert.equal(fieldMetadata.contextTexts[0], heading);
+    }
+    return definition.controls;
+  }
+
+  const fixed = makeBox('電話番号', 'phoneNumber');
+  const mobile = makeBox('携帯電話番号', 'mobilePhone');
+  const document = new FakeDocument(controls, labels);
+
+  assert.deepEqual(fillDocument(document, {
+    phoneNumber: '03-1234-5678',
+    mobilePhone: '090-2345-6789',
+  }), { filledCount: 6, failedCount: 0 });
+  assert.deepEqual(fixed.map((control) => control.value), ['03', '1234', '5678']);
+  assert.deepEqual(mobile.map((control) => control.value), ['090', '2345', '6789']);
+});
+
+test('hyphen labels do not break DD phone groups and reserved mobile controls never get whole values', () => {
+  const controls = [];
+  const labels = [];
+
+  function phoneGroup(heading) {
+    const term = new FakeContainer('dt', { textContent: heading });
+    const fields = [];
+    const groupLabels = [];
+    for (let index = 0; index < 3; index += 1) {
+      const input = new FakeInput({ type: 'text' });
+      const wrapper = new FakeContainer('span', { controls: [input], children: [input] });
+      fields.push(wrapper);
+      controls.push(input);
+      if (index < 2) {
+        const hyphen = new FakeLabel('-', 'unmatched');
+        hyphen.className = 'hyphen';
+        groupLabels.push(hyphen);
+        labels.push(hyphen);
+      }
+    }
+    // The site places a hyphen label immediately before the second and third wrappers.
+    const inputFields = fields.filter((field) => field instanceof FakeContainer);
+    const children = [inputFields[0], groupLabels[0], inputFields[1], groupLabels[1], inputFields[2]];
+    const definition = new FakeContainer('dd', { labels: groupLabels, children });
+    definition.controls = inputFields.map((field) => field.controls[0]);
+    const box = new FakeContainer('div', { children: [term, definition] });
+    box.controls = definition.controls;
+    return definition.controls;
+  }
+
+  const fixed = phoneGroup('電話番号');
+  const mobile = phoneGroup('携帯電話番号');
+  const document = new FakeDocument(controls, labels);
+
+  for (const [group, key] of [[fixed, 'phoneNumber'], [mobile, 'mobilePhone']]) {
+    for (const [index, input] of group.entries()) {
+      const fieldMetadata = collectFieldMetadata(input, document);
+      assert.equal(fieldMetadata.contextTexts[0], key === 'phoneNumber' ? '電話番号' : '携帯電話番号');
+      assert.deepEqual(fieldMetadata.nearLabelTexts, index === 0 ? [] : ['-']);
+      assert.equal(classifyControl(fieldMetadata)?.profileKey, key);
+    }
+  }
+
+  assert.deepEqual(fillDocument(document, {
+    phoneNumber: '09052396441',
+    mobilePhone: '09052396441',
+  }), { filledCount: 6, failedCount: 0 });
+  assert.deepEqual(fixed.map((input) => input.value), ['090', '5239', '6441']);
+  assert.deepEqual(mobile.map((input) => input.value), ['090', '5239', '6441']);
+  for (const input of [...fixed, ...mobile]) {
+    assert.deepEqual(input.events.map(({ type }) => type), ['input', 'change']);
+  }
+});
+
+test('DD phone groups remain grouped beyond the shallow per-control ancestor walk', () => {
+  const controls = [];
+  const labels = [];
+  function makeGroup(heading) {
+    const term = new FakeContainer('dt', { textContent: heading });
+    const inputs = Array.from({ length: 3 }, () => {
+      const input = new FakeInput({ type: 'text' });
+      let branch = input;
+      for (let depth = 0; depth < 7; depth += 1) {
+        const wrapper = new FakeContainer('div', { children: [branch] });
+        wrapper.controls = [input];
+        branch = wrapper;
+      }
+      const field = new FakeContainer('span', { children: [branch] });
+      field.controls = [input];
+      controls.push(input);
+      return { input, field };
+    });
+    const hyphens = [new FakeLabel('-', ''), new FakeLabel('-', '')];
+    labels.push(...hyphens);
+    const definition = new FakeContainer('dd', {
+      children: [inputs[0].field, hyphens[0], inputs[1].field, hyphens[1], inputs[2].field],
+      labels: hyphens,
+    });
+    definition.controls = inputs.map(({ input }) => input);
+    new FakeContainer('div', { children: [term, definition] });
+    for (const { input } of inputs) {
+      const fieldMetadata = collectFieldMetadata(input, new FakeDocument(controls, labels));
+      assert.equal(fieldMetadata.contextTexts[0], heading);
+      assert.equal(classifyControl(fieldMetadata)?.profileKey, heading === '電話番号' ? 'phoneNumber' : 'mobilePhone');
+    }
+    return inputs.map(({ input }) => input);
+  }
+
+  const fixed = makeGroup('電話番号');
+  const mobile = makeGroup('携帯電話番号');
+  assert.deepEqual(fillDocument(new FakeDocument(controls, labels), {
+    phoneNumber: '09052396441',
+    mobilePhone: '09052396441',
+  }), { filledCount: 6, failedCount: 0 });
+  assert.deepEqual(fixed.map((input) => input.value), ['090', '5239', '6441']);
+  assert.deepEqual(mobile.map((input) => input.value), ['090', '5239', '6441']);
+  for (const input of [...fixed, ...mobile]) {
+    assert.deepEqual(input.events.map(({ type }) => type), ['input', 'change']);
+  }
+});
+
+test('radio gender uses a unique nearby sibling label even when for is wrong', () => {
+  const male = new FakeInput({ type: 'radio', name: 'sexcd', id: 'male-choice', value: '1' });
+  const female = new FakeInput({ type: 'radio', name: 'sexcd', id: 'female-choice', value: '2' });
+  const maleLabel = new FakeLabel('男', 'text');
+  const femaleLabel = new FakeLabel('女', 'text');
+  new FakeContainer('li', { controls: [male], labels: [maleLabel] });
+  new FakeContainer('li', { controls: [female], labels: [femaleLabel] });
+  const document = new FakeDocument([male, female], [maleLabel, femaleLabel]);
+
+  assert.deepEqual(fillDocument(document, { gender: '男性' }), { filledCount: 1, failedCount: 0 });
+  assert.equal(male.checked, true);
+  assert.equal(female.checked, false);
+  assert.deepEqual(male.events.map(({ type }) => type), ['input', 'change']);
+  assert.deepEqual(female.events, []);
+});
+
+test('radio with multiple nearby label candidates is left unchecked', () => {
+  const ambiguous = new FakeInput({ type: 'radio', name: 'sexcd', id: 'ambiguous', value: '1' });
+  const female = new FakeInput({ type: 'radio', name: 'sexcd', id: 'female', value: '2' });
+  const labels = [new FakeLabel('男', 'text'), new FakeLabel('その他', 'text')];
+  const femaleLabel = new FakeLabel('女', 'text');
+  new FakeContainer('li', { controls: [ambiguous], labels });
+  new FakeContainer('li', { controls: [female], labels: [femaleLabel] });
+  const document = new FakeDocument([ambiguous, female], [...labels, femaleLabel]);
+
+  assert.deepEqual(fillDocument(document, { gender: '男性' }), { filledCount: 0, failedCount: 0 });
+  assert.equal(ambiguous.checked, false);
+  assert.equal(female.checked, false);
+  assert.deepEqual(ambiguous.events, []);
+});
+
+test('split fixed and mobile phone groups use only their matching profile values', () => {
+  const makeGroup = (prefix, label, content) => {
+    const controls = [1, 2, 3].map((number) => new FakeInput({
+      type: 'text',
+      name: `${prefix}${number}`,
+    }));
+    const labelNode = new FakeLabel(label);
+    const group = new FakeContainer('div', {
+      controls,
+      labels: [labelNode],
+      textContent: `${label}--`,
+    });
+    return { controls, group };
+  };
+  const fixed = makeGroup('gtel', '固定電話番号');
+  const mobile = makeGroup('kttel', '携帯電話番号');
+  const unrelated = [1, 2, 3].map((number) => new FakeInput({ type: 'text', name: `other${number}` }));
+  new FakeContainer('div', { controls: unrelated, textContent: '---' });
+  const document = new FakeDocument([...fixed.controls, ...mobile.controls, ...unrelated]);
+
+  assert.deepEqual(fillDocument(document, {
+    phoneNumber: '03-1234-5678',
+    mobilePhone: '090-1234-5678',
+  }), { filledCount: 6, failedCount: 0 });
+  assert.deepEqual(fixed.controls.map((control) => control.value), ['03', '1234', '5678']);
+  assert.deepEqual(mobile.controls.map((control) => control.value), ['090', '1234', '5678']);
+  assert.deepEqual(unrelated.map((control) => control.value), ['', '', '']);
+
+  const fixedOnly = makeGroup('fixed', '固定電話番号');
+  const mobileOnly = makeGroup('mobile', '携帯電話番号');
+  const secondDocument = new FakeDocument([...fixedOnly.controls, ...mobileOnly.controls]);
+  assert.deepEqual(fillDocument(secondDocument, {
+    phoneNumber: '',
+    mobilePhone: '090-1234-5678',
+  }), { filledCount: 3, failedCount: 0 });
+  assert.deepEqual(fixedOnly.controls.map((control) => control.value), ['', '', '']);
+  assert.deepEqual(mobileOnly.controls.map((control) => control.value), ['090', '1234', '5678']);
+
+  const fixedPhone = new FakeInput({ type: 'tel', id: 'fixed-phone' });
+  const mobilePhone = new FakeInput({ type: 'tel', id: 'mobile-phone' });
+  const singleDocument = new FakeDocument(
+    [fixedPhone, mobilePhone],
+    [new FakeLabel('電話番号', 'fixed-phone'), new FakeLabel('携帯電話', 'mobile-phone')],
+  );
+  assert.deepEqual(fillDocument(singleDocument, {
+    phoneNumber: '03-1234-5678',
+    mobilePhone: '',
+  }), { filledCount: 1, failedCount: 0 });
+  assert.equal(fixedPhone.value, '03-1234-5678');
+  assert.equal(mobilePhone.value, '');
+});
+
+test('email fills standard, @ split, and explicit confirmation fields but skips mobile email', () => {
+  const standard = new FakeInput({ type: 'email', id: 'standard' });
+  const confirmation = new FakeInput({ type: 'email', id: 'confirmation' });
+  const mobileEmail = new FakeInput({ type: 'email', id: 'mobile-email' });
+  const account = new FakeInput({ type: 'text' });
+  const domain = new FakeInput({ type: 'text' });
+  const confirmAccount = new FakeInput({ type: 'text' });
+  const confirmDomain = new FakeInput({ type: 'text' });
+  const unconfirmedAccount = new FakeInput({ type: 'text', name: 'account2' });
+  const unconfirmedDomain = new FakeInput({ type: 'text', name: 'domain2' });
+  const mainGroup = new FakeContainer('div', {
+    controls: [account, domain], labels: [new FakeLabel('メールアドレス')], textContent: '＠',
+  });
+  const confirmGroup = new FakeContainer('li', {
+    controls: [confirmAccount, confirmDomain],
+    labels: [new FakeLabel('メールアドレス再入力')],
+    textContent: '＠',
+  });
+  new FakeContainer('div', {
+    controls: [unconfirmedAccount, unconfirmedDomain],
+    textContent: '＠',
+  });
+  const labels = [
+    new FakeLabel('E-mail address', 'standard'),
+    new FakeLabel('E-mail address confirm', 'confirmation'),
+    new FakeLabel('携帯アドレス', 'mobile-email'),
+    mainGroup.labels[0],
+    confirmGroup.labels[0],
+  ];
+  const controls = [
+    standard,
+    confirmation,
+    mobileEmail,
+    account,
+    domain,
+    confirmAccount,
+    confirmDomain,
+    unconfirmedAccount,
+    unconfirmedDomain,
+  ];
+  const document = new FakeDocument(controls, labels);
+
+  assert.deepEqual(fillDocument(document, { email: 'sample@example.com' }), {
+    filledCount: 6,
+    failedCount: 0,
+  });
+  assert.equal(standard.value, 'sample@example.com');
+  assert.equal(confirmation.value, 'sample@example.com');
+  assert.equal(mobileEmail.value, '');
+  assert.deepEqual([account.value, domain.value], ['sample', 'example.com']);
+  assert.deepEqual([confirmAccount.value, confirmDomain.value], ['sample', 'example.com']);
+  assert.deepEqual([unconfirmedAccount.value, unconfirmedDomain.value], ['', '']);
+  assert.ok(mainGroup && confirmGroup);
+});
+
+test('duplicate email fields without an explicit confirmation label remain unchanged', () => {
+  const first = new FakeInput({ type: 'email', id: 'mail-one' });
+  const second = new FakeInput({ type: 'email', id: 'mail-two' });
+  const document = new FakeDocument(
+    [first, second],
+    [new FakeLabel('メールアドレス', 'mail-one'), new FakeLabel('メールアドレス', 'mail-two')],
+  );
+
+  assert.deepEqual(fillDocument(document, { email: 'sample@example.com' }), {
+    filledCount: 0,
+    failedCount: 0,
+  });
+  assert.equal(first.value, '');
+  assert.equal(second.value, '');
 });
 
 test('fillDocument updates only writable text inputs with non-empty matching profile values', () => {
   const firstFamily = new FakeInput({ name: 'last_name' }, { value: 'old' });
   const secondFamily = new FakeInput({ placeholder: 'Family Name' });
   const emptyGiven = new FakeInput({ name: 'first_name' }, { value: 'keep' });
-  const japaneseFamily = new FakeInput({ id: 'jp-family' });
+  const japaneseFamily = new FakeInput({ id: 'familyNameJa', name: 'family_name_ja' });
   const hidden = new FakeInput({ name: 'last_name', type: 'hidden' }, { value: 'hidden' });
   const email = new FakeInput({ name: 'email', type: 'email' }, { value: 'email' });
   const disabled = new FakeInput({ name: 'last_name' }, { disabled: true, value: 'disabled' });
   const readOnly = new FakeInput({ name: 'last_name' }, { readOnly: true, value: 'readonly' });
   const document = new FakeDocument(
     [firstFamily, secondFamily, emptyGiven, japaneseFamily, hidden, email, disabled, readOnly],
-    [new FakeLabel('姓', 'jp-family')],
+    [new FakeLabel('姓', 'familyNameJa')],
   );
 
   const result = fillDocument(document, {
@@ -1244,8 +2353,8 @@ test('strong Japanese labels outrank repeated weaker English metadata', () => {
   });
   const japaneseFamilyWithAutocomplete = metadata({
     labelTexts: ['姓'],
-    id: 'familyName',
-    name: 'family_name',
+    id: 'familyNameJa',
+    name: 'family_name_ja',
     autocomplete: 'family-name',
   });
 
@@ -1300,14 +2409,14 @@ test('normalized separators cannot bypass unrelated Japanese field exclusions', 
   }
 });
 
-test('classifyField recognizes Japanese instructions containing an explicit surname or given-name token', () => {
+test('classifyField leaves surname and given-name instructions ambiguous without a group context', () => {
   assert.equal(
     classifyField(metadata({ labelTexts: ['姓を入力してください'] })),
-    'familyName',
+    null,
   );
   assert.equal(
     classifyField(metadata({ labelTexts: ['名を入力してください'] })),
-    'givenName',
+    null,
   );
 });
 
@@ -1480,6 +2589,57 @@ test('date inputs reject year zero without clearing the existing value', () => {
   );
   assert.equal(birthday.value, '2000-01-01');
   assert.deepEqual(birthday.events, []);
+});
+
+test('date and month select segments match zero-padded numeric options but generic selects stay exact', () => {
+  const monthDate = new FakeSelect({ id: 'birth-month', name: 'birthMonth' }, [
+    new FakeOption('5', '5月'),
+  ]);
+  const dayDate = new FakeSelect({ id: 'birth-day', name: 'birthDay' }, [
+    new FakeOption('5', '5日'),
+  ]);
+  const graduationMonth = new FakeSelect({ id: 'grad-month', name: 'graduationMonth' }, [
+    new FakeOption('05', '五月'),
+  ]);
+  const genericCourse = new FakeSelect({ id: 'course', name: 'academicCourse' }, [
+    new FakeOption('5', '05'),
+  ]);
+  const document = new FakeDocument(
+    [monthDate, dayDate, graduationMonth, genericCourse],
+    [
+      new FakeLabel('生年月日 月', 'birth-month'),
+      new FakeLabel('生年月日 日', 'birth-day'),
+      new FakeLabel('卒業年月 月', 'grad-month'),
+      new FakeLabel('課程', 'course'),
+    ],
+  );
+
+  assert.deepEqual(fillDocument(document, {
+    birthDate: '2002-05-05',
+    graduationMonth: '2028-05',
+    academicCourse: '5',
+  }), { filledCount: 3, failedCount: 0 });
+  assert.equal(monthDate.value, '5');
+  assert.equal(dayDate.value, '5');
+  assert.equal(graduationMonth.value, '05');
+  assert.equal(genericCourse.value, '');
+});
+
+test('value changes dispatch only input/change and do not call extension submit or click actions', () => {
+  const family = new FakeInput({ id: 'family' });
+  const document = new FakeDocument([family], [new FakeLabel('苗字', 'family')]);
+  let clickCalls = 0;
+  const actionButton = { click() { clickCalls += 1; } };
+
+  assert.deepEqual(fillDocument(document, { familyName: '山田' }), {
+    filledCount: 1,
+    failedCount: 0,
+  });
+  assert.deepEqual(family.events.map(({ type }) => type), ['input', 'change']);
+  assert.equal(document.submitCalls, 0);
+  assert.equal(document.requestSubmitCalls, 0);
+  assert.equal(clickCalls, 0);
+  assert.ok(actionButton);
 });
 
 test('fillDocument skips disabled, readonly, unavailable, and ambiguous controls', () => {

@@ -41,6 +41,11 @@ test('popup contains all profile fields, sections, actions, status region, and o
     'givenName',
     'familyNameLatin',
     'givenNameLatin',
+    'familyNameKana',
+    'givenNameKana',
+    'phoneNumber',
+    'mobilePhone',
+    'email',
     'birthDate',
     'gender',
     'currentPrefecture',
@@ -115,4 +120,40 @@ test('production assets contain no remote requests or dynamic code evaluation', 
       assert.equal(source.includes(token), false, `${relativePath}: ${token}`);
     }
   }
+});
+
+test('legacy trailing-unit and two-pair email fixture stays minimal and anonymous', () => {
+  const fixture = read('tests/fixtures/legacy-trailing-unit-email.html');
+  assert.match(fixture, /<dt>生年月日<\/dt>[\s\S]*<select>[\s\S]*<\/select><\/span><label>年<\/label>/);
+  assert.match(fixture, /<dt>E-mailアドレス<\/dt>[\s\S]*<input type="text">[\s\S]*＠[\s\S]*<input type="text">[\s\S]*＠[\s\S]*<input type="text">[\s\S]*＠[\s\S]*<input type="text">/);
+  assert.match(fixture, /<dt>携帯アドレス<\/dt>[\s\S]*＠[\s\S]*＠/);
+  assert.doesNotMatch(fixture, /[A-Za-z0-9.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+});
+
+test('legacy fixture stays minimal and contains only anonymous structure examples', () => {
+  const fixture = read('tests/fixtures/test-form.html');
+
+  for (const snippet of [
+    '<label for="text">姓：</label><input name="kname1"',
+    '<label for="text">セイ：</label><input name="yname1"',
+    '<select name="ybirth">',
+    'type="radio" value="1"><label for="text">男</label>',
+    '<input name="gtel1" type="text">-<input name="gtel2" type="text">-<input name="gtel3"',
+    '<input name="account1" type="text">＠<input name="domain1"',
+    'name="mobileAddress" type="email"',
+    'style="display: none"><option value="">選択してください</option>',
+    '<div class="formbox">\n        <dt class="formbox01">漢字氏名</dt>',
+    '<dd class="formbox02"><span><div><label for="text">姓：</label><div class="jqTransformInputWrapper"><div><div><input type="text">',
+    '<dt class="formbox01">カナ氏名</dt>',
+    '<dt class="formbox01">生年月日</dt>',
+    '<dt class="formbox01">電話番号</dt>\n        <dd class="formbox02"><span><input name="gtel1" type="text"></span><label class="hyphen">-</label>',
+    '<dt class="formbox01">携帯電話番号</dt>\n        <dd class="formbox02"><span><input name="kttel1" type="text"></span><label class="hyphen">-</label>',
+    '<select style="display: none"><option value="">年</option><option value="2028">2028年</option></select><label for="text">年</label>',
+    '<dt class="formbox01">E-mailアドレス確認</dt>',
+  ]) {
+    assert.ok(fixture.includes(snippet), `missing legacy structure: ${snippet}`);
+  }
+
+  assert.match(fixture, /addEventListener\('submit'/);
+  assert.doesNotMatch(fixture, /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
 });
