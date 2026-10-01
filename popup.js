@@ -10,11 +10,31 @@
     const storageApi = root.RakurakuProfileStorage.createProfileStorage(
       root.chrome.storage.local,
     );
+    const fileApi = {
+      downloadText(filename, contents, mimeType) {
+        const url = root.URL.createObjectURL(new root.Blob([contents], { type: mimeType }));
+        try {
+          const link = root.document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          link.click();
+        } finally {
+          root.URL.revokeObjectURL(url);
+        }
+      },
+      readText(file) {
+        return file.text();
+      },
+      confirmReplace() {
+        return root.confirm('現在保存されているプロフィールを、選択したファイルの内容で置き換えます。よろしいですか？');
+      },
+    };
     const controller = api.createPopupController({
       document: root.document,
       storageApi,
       tabsApi: root.chrome.tabs,
       scriptingApi: root.chrome.scripting,
+      fileApi,
     });
 
     root.document.getElementById('saveButton').addEventListener('click', () => {
@@ -22,6 +42,18 @@
     });
     root.document.getElementById('fillButton').addEventListener('click', () => {
       controller.fillCurrentPage();
+    });
+    root.document.getElementById('exportButton').addEventListener('click', () => {
+      controller.exportProfile();
+    });
+    const importFileInput = root.document.getElementById('importFileInput');
+    root.document.getElementById('importButton').addEventListener('click', () => {
+      importFileInput.click();
+    });
+    importFileInput.addEventListener('change', () => {
+      const file = importFileInput.files && importFileInput.files[0];
+      if (file) controller.importProfile(file);
+      importFileInput.value = '';
     });
     controller.init();
   }
@@ -86,7 +118,7 @@
     ['finalEducationCompletionStatus', 'finalEducation', '', 'completionStatus'],
   ];
 
-  function createPopupController({ document, storageApi, tabsApi, scriptingApi }) {
+  function createPopupController({ document, storageApi, tabsApi, scriptingApi, fileApi }) {
     const fields = Object.fromEntries(
       [...PROFILE_KEYS, ...EDUCATION_FIELD_BINDINGS.map(([id]) => id)]
         .map((key) => [key, document.getElementById(key)]),
@@ -161,6 +193,47 @@
       }
     }
 
+    async function exportProfile() {
+      try {
+        const contents = await storageApi.exportJson();
+        fileApi.downloadText('profile.local.json', contents, 'application/json');
+        setStatus('プロフィールをエクスポートしました。', 'success');
+      } catch (_error) {
+        setStatus('プロフィールをエクスポートできませんでした。', 'error');
+      }
+    }
+
+    async function importProfile(file) {
+      let profile;
+      try {
+        const contents = await fileApi.readText(file);
+        profile = storageApi.parseImportJson(contents);
+      } catch (_error) {
+        setStatus('プロフィールファイルを読み込めませんでした。', 'error');
+        return;
+      }
+
+      let confirmed;
+      try {
+        confirmed = fileApi.confirmReplace();
+      } catch (_error) {
+        setStatus('プロフィールをインポートできませんでした。', 'error');
+        return;
+      }
+      if (!confirmed) {
+        setStatus('インポートをキャンセルしました。');
+        return;
+      }
+
+      try {
+        const savedProfile = await storageApi.save(profile);
+        writeForm(savedProfile);
+        setStatus('プロフィールをインポートしました。', 'success');
+      } catch (_error) {
+        setStatus('プロフィールをインポートできませんでした。', 'error');
+      }
+    }
+
     function showFillResult(result) {
       const { filledCount, failedCount } = result;
 
@@ -229,7 +302,7 @@
       }
     }
 
-    return { init, saveProfile, fillCurrentPage };
+    return { init, saveProfile, exportProfile, importProfile, fillCurrentPage };
   }
 
   return { createPopupController };

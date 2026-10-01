@@ -2,6 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createPopupController } = require('../popup.js');
+const {
+  createProfileExport,
+  serializeProfileExport,
+  parseProfileImportJson,
+} = require('../profile-storage.js');
 
 const PROFILE_KEYS = [
   'familyName',
@@ -109,6 +114,9 @@ function createFakeDocument(values = {}) {
     }]),
     ['saveButton', { disabled: false, addEventListener() {} }],
     ['fillButton', { disabled: false, addEventListener() {} }],
+    ['exportButton', { disabled: false, addEventListener() {} }],
+    ['importButton', { disabled: false, addEventListener() {} }],
+    ['importFileInput', { disabled: false, value: '', files: [], addEventListener() {}, click() {} }],
     ['status', { textContent: '', dataset: {} }],
   ]);
 
@@ -152,6 +160,12 @@ function createHarness(options = {}) {
       ));
       return normalized;
     },
+    async exportJson() {
+      return serializeProfileExport(await this.load());
+    },
+    parseImportJson(source) {
+      return parseProfileImportJson(source);
+    },
   };
   const tabsApi = {
     calls: [],
@@ -171,14 +185,33 @@ function createHarness(options = {}) {
         : options.injectionResult;
     },
   };
+  const fileApi = {
+    downloadCalls: [],
+    readCalls: [],
+    confirmCalls: 0,
+    downloadText(filename, contents, mimeType) {
+      if (options.downloadError) throw options.downloadError;
+      this.downloadCalls.push({ filename, contents, mimeType });
+    },
+    async readText(file) {
+      this.readCalls.push(file);
+      if (options.readError) throw options.readError;
+      return file.text();
+    },
+    confirmReplace() {
+      this.confirmCalls += 1;
+      return options.confirmResult === undefined ? true : options.confirmResult;
+    },
+  };
   const controller = createPopupController({
     document,
     storageApi,
     tabsApi,
     scriptingApi,
+    fileApi,
   });
 
-  return { document, storageApi, tabsApi, scriptingApi, controller };
+  return { document, storageApi, tabsApi, scriptingApi, fileApi, controller };
 }
 
 test('init restores all saved values into the popup', async () => {
@@ -338,6 +371,96 @@ test('saveProfile reports storage failure without exposing the error text', asyn
   await harness.controller.saveProfile();
 
   assert.equal(harness.document.elements.status.textContent, '保存できませんでした。');
+  assert.equal(harness.document.elements.status.textContent.includes(secretError.message), false);
+  assert.equal(harness.document.elements.status.dataset.kind, 'error');
+});
+
+test('exportProfile downloads every saved profile field as profile.local.json', async () => {
+  const harness = createHarness();
+
+  await harness.controller.exportProfile();
+
+  assert.equal(harness.fileApi.downloadCalls.length, 1);
+  const download = harness.fileApi.downloadCalls[0];
+  assert.equal(download.filename, 'profile.local.json');
+  assert.equal(download.mimeType, 'application/json');
+  assert.deepEqual(JSON.parse(download.contents), createProfileExport(SAVED_PROFILE));
+  assert.equal(harness.document.elements.status.textContent, 'プロフィールをエクスポートしました。');
+  assert.equal(harness.document.elements.status.dataset.kind, 'success');
+});
+
+test('importProfile validates, confirms, saves, and restores every imported field', async () => {
+  const imported = structuredClone(SAVED_PROFILE);
+  imported.familyName = 'test-imported-family';
+  imported.educationHistory.master.graduateSchoolName = 'test-imported-graduate-school';
+  imported.finalEducation.completionStatus = 'completed';
+  const file = { text: async () => serializeProfileExport(imported) };
+  const harness = createHarness({ values: { familyName: 'test-before-import' } });
+
+  await harness.controller.importProfile(file);
+
+  assert.deepEqual(harness.fileApi.readCalls, [file]);
+  assert.equal(harness.fileApi.confirmCalls, 1);
+  assert.deepEqual(harness.storageApi.saveCalls, [imported]);
+  assert.equal(harness.document.elements.familyName.value, 'test-imported-family');
+  assert.equal(
+    harness.document.elements.masterGraduateSchoolName.value,
+    'test-imported-graduate-school',
+  );
+  assert.equal(harness.document.elements.finalEducationCompletionStatus.value, 'completed');
+  assert.equal(harness.document.elements.status.textContent, 'プロフィールをインポートしました。');
+  assert.equal(harness.document.elements.status.dataset.kind, 'success');
+});
+
+test('importProfile rejects invalid JSON and unsupported versions without changing data', async (t) => {
+  const invalidFiles = [
+    { name: 'invalid JSON', source: '{' },
+    {
+      name: 'unsupported version',
+      source: JSON.stringify({ ...createProfileExport(SAVED_PROFILE), version: 999 }),
+    },
+  ];
+
+  for (const { name, source } of invalidFiles) {
+    await t.test(name, async () => {
+      const harness = createHarness({ values: { familyName: 'test-existing-ui' } });
+      await harness.controller.importProfile({ text: async () => source });
+      assert.equal(harness.fileApi.confirmCalls, 0);
+      assert.deepEqual(harness.storageApi.saveCalls, []);
+      assert.equal(harness.document.elements.familyName.value, 'test-existing-ui');
+      assert.equal(harness.document.elements.status.textContent, 'プロフィールファイルを読み込めませんでした。');
+      assert.equal(harness.document.elements.status.dataset.kind, 'error');
+    });
+  }
+});
+
+test('importProfile cancellation leaves saved data and the form unchanged', async () => {
+  const harness = createHarness({
+    values: { familyName: 'test-existing-ui' },
+    confirmResult: false,
+  });
+
+  await harness.controller.importProfile({ text: async () => serializeProfileExport(SAVED_PROFILE) });
+
+  assert.equal(harness.fileApi.confirmCalls, 1);
+  assert.deepEqual(harness.storageApi.saveCalls, []);
+  assert.equal(harness.document.elements.familyName.value, 'test-existing-ui');
+  assert.equal(harness.document.elements.status.textContent, 'インポートをキャンセルしました。');
+});
+
+test('importProfile save failure leaves the form unchanged and hides error details', async () => {
+  const secretError = new Error('test-private-error-detail');
+  const harness = createHarness({
+    values: { familyName: 'test-existing-ui' },
+    saveError: secretError,
+  });
+
+  await harness.controller.importProfile({ text: async () => serializeProfileExport(SAVED_PROFILE) });
+
+  assert.equal(harness.fileApi.confirmCalls, 1);
+  assert.equal(harness.storageApi.saveCalls.length, 1);
+  assert.equal(harness.document.elements.familyName.value, 'test-existing-ui');
+  assert.equal(harness.document.elements.status.textContent, 'プロフィールをインポートできませんでした。');
   assert.equal(harness.document.elements.status.textContent.includes(secretError.message), false);
   assert.equal(harness.document.elements.status.dataset.kind, 'error');
 });

@@ -3,8 +3,13 @@ const assert = require('node:assert/strict');
 
 const {
   PROFILE_KEYS,
+  PROFILE_EXPORT_FORMAT,
+  PROFILE_EXPORT_VERSION,
   normalizeProfile,
   createProfileStorage,
+  createProfileExport,
+  serializeProfileExport,
+  parseProfileImportJson,
 } = require('../profile-storage.js');
 
 const EMPTY_PROFILE = {
@@ -361,4 +366,81 @@ test('save stores one normalized profile object and returns it', async () => {
 
   assert.deepEqual(await storage.save(input), expected);
   assert.deepEqual(area.lastSet, { profile: expected });
+});
+
+test('profile export contains every normalized profile field in a versioned envelope', () => {
+  const profile = normalizeProfile({
+    ...Object.fromEntries(PROFILE_KEYS.map((key) => [key, `test-${key}`])),
+    researchKeywords: ['test-keyword-a', 'test-keyword-b'],
+    educationHistory: {
+      middleSchool: { schoolName: 'test-middle', enrollmentMonth: '2012-04', graduationMonth: '2015-03' },
+      highSchool: { schoolName: 'test-high', enrollmentMonth: '2015-04', graduationMonth: '2018-03' },
+      bachelor: {
+        universityName: 'test-university', facultyName: 'test-faculty', departmentName: 'test-department',
+        enrollmentMonth: '2018-04', graduationMonth: '2022-03',
+      },
+      master: {
+        graduateSchoolName: 'test-graduate-school', graduateDepartmentName: 'test-graduate-department',
+        majorName: 'test-major', enrollmentMonth: '2022-04', completionMonth: '2024-03',
+      },
+    },
+    finalEducation: { level: 'master', completionStatus: 'completed' },
+  });
+
+  const exported = createProfileExport(profile);
+
+  assert.equal(exported.format, PROFILE_EXPORT_FORMAT);
+  assert.equal(exported.version, PROFILE_EXPORT_VERSION);
+  assert.deepEqual(exported.profile, profile);
+  assert.deepEqual(parseProfileImportJson(serializeProfileExport(profile)), profile);
+});
+
+test('old saved profiles export with missing fields normalized to the current schema', async () => {
+  const storage = createProfileStorage(createFakeStorage({
+    profile: { familyName: 'test-legacy-name' },
+  }));
+
+  const exported = JSON.parse(await storage.exportJson());
+
+  assert.equal(exported.format, PROFILE_EXPORT_FORMAT);
+  assert.equal(exported.version, PROFILE_EXPORT_VERSION);
+  assert.equal(exported.profile.familyName, 'test-legacy-name');
+  assert.deepEqual(exported.profile.educationHistory, EMPTY_PROFILE.educationHistory);
+  assert.deepEqual(exported.profile.finalEducation, EMPTY_PROFILE.finalEducation);
+  assert.equal(Object.hasOwn(exported.profile, 'currentPostalCode'), true);
+  assert.equal(Object.hasOwn(exported.profile, 'researchOverview'), true);
+});
+
+test('profile import rejects invalid JSON, unsupported versions, shapes, and field types', () => {
+  const valid = createProfileExport(EMPTY_PROFILE);
+  const cases = [
+    '{',
+    JSON.stringify({ ...valid, format: 'other-format' }),
+    JSON.stringify({ ...valid, version: PROFILE_EXPORT_VERSION + 1 }),
+    JSON.stringify({ ...valid, extra: true }),
+    JSON.stringify({ ...valid, profile: { ...valid.profile, familyName: 1 } }),
+    JSON.stringify({ ...valid, profile: { ...valid.profile, researchKeywords: ['ok', 1] } }),
+    JSON.stringify({
+      ...valid,
+      profile: { ...valid.profile, finalEducation: { level: 'unsupported', completionStatus: '' } },
+    }),
+    JSON.stringify({
+      ...valid,
+      profile: { ...valid.profile, educationHistory: { ...valid.profile.educationHistory, master: null } },
+    }),
+  ];
+  const missingField = structuredClone(valid);
+  delete missingField.profile.email;
+  cases.push(JSON.stringify(missingField));
+
+  for (const source of cases) {
+    assert.throws(() => parseProfileImportJson(source));
+  }
+});
+
+test('profile import accepts empty optional values when every field has the correct type', () => {
+  assert.deepEqual(
+    parseProfileImportJson(JSON.stringify(createProfileExport(EMPTY_PROFILE))),
+    EMPTY_PROFILE,
+  );
 });

@@ -310,6 +310,16 @@
         <button id="fillButton" class="button button-primary" type="button">このページに入力</button>
       </div>
 
+      <div class="transfer-actions" aria-label="プロフィールの移行">
+        <button id="exportButton" class="button button-secondary" type="button">プロフィールをエクスポート</button>
+        <button id="importButton" class="button button-secondary" type="button">プロフィールをインポート</button>
+        <input id="importFileInput" type="file" accept=".json,application/json" hidden>
+      </div>
+
+      <p class="export-warning">
+        エクスポートファイルには個人情報が含まれ、暗号化されません。安全な場所で保管してください。
+      </p>
+
       <p id="status" class="status" aria-live="polite"></p>
       <p class="privacy-note">入力や送信は、ボタンを押したときだけ行います。</p>
     </main>

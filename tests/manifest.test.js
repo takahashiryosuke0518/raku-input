@@ -82,6 +82,9 @@ test('popup contains all profile fields, sections, actions, status region, and o
     'finalEducationCompletionStatus',
     'saveButton',
     'fillButton',
+    'exportButton',
+    'importButton',
+    'importFileInput',
     'status',
   ];
 
@@ -100,6 +103,11 @@ test('popup contains all profile fields, sections, actions, status region, and o
   assert.match(popup, /<label for=["']masterGraduateSchoolName["']>大学院学校名<\/label>\s*<input id=["']masterGraduateSchoolName["']/);
   assert.match(popup, /<label for=["']masterGraduateDepartmentName["']>研究科名<\/label>\s*<input id=["']masterGraduateDepartmentName["']/);
   assert.match(popup, /<option[^>]+value=["']doctorate["']>大学院（博士）<\/option>/);
+  assert.match(popup, /<button[^>]+id=["']exportButton["'][^>]*>プロフィールをエクスポート<\/button>/);
+  assert.match(popup, /<button[^>]+id=["']importButton["'][^>]*>プロフィールをインポート<\/button>/);
+  assert.match(popup, /<input[^>]+id=["']importFileInput["'][^>]+type=["']file["'][^>]+accept=["'][^"']*\.json[^"']*["']/);
+  assert.match(popup, /個人情報/);
+  assert.match(popup, /暗号化されません/);
   assert.match(popup, /id=["']status["'][^>]*aria-live=["']polite["']/);
   assert.match(popup, /<link[^>]+href=["']popup\.css["']/);
 
@@ -114,6 +122,15 @@ test('popup contains all profile fields, sections, actions, status region, and o
     assert.match(attributes, /\bsrc=["'][^"']+["']/);
     assert.equal(body.trim(), '');
   }
+});
+
+test('local profile exports and personal environment files are ignored by git', () => {
+  const gitignore = read('.gitignore');
+  const entries = new Set(gitignore.split('\n').map((line) => line.trim()).filter(Boolean));
+
+  assert.equal(entries.has('profile.local.json'), true);
+  assert.equal(entries.has('*.personal.json'), true);
+  assert.equal(entries.has('.env'), true);
 });
 
 test('production assets contain no remote requests or dynamic code evaluation', () => {

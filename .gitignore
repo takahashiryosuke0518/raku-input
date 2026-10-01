@@ -1,0 +1,3 @@
+profile.local.json
+*.personal.json
+.env

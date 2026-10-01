@@ -52,6 +52,8 @@
   const FINAL_EDUCATION_COMPLETION_STATUSES = new Set([
     'graduated', 'graduationExpected', 'completed', 'completionExpected',
   ]);
+  const PROFILE_EXPORT_FORMAT = 'rakuraku-profile';
+  const PROFILE_EXPORT_VERSION = 1;
 
   function normalizeRecord(source, fields) {
     const record = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
@@ -130,27 +132,103 @@
     return profile;
   }
 
-  function createProfileStorage(storageArea) {
-    return {
-      async load() {
-        const stored = await storageArea.get('profile');
-        return normalizeProfile(stored && stored.profile);
-      },
+  function isPlainObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
 
-      async save(value) {
-        const profile = normalizeProfile(value);
-        await storageArea.set({ profile });
-        return profile;
+  function hasExactKeys(value, expectedKeys) {
+    if (!isPlainObject(value)) return false;
+    const actualKeys = Object.keys(value);
+    return actualKeys.length === expectedKeys.length
+      && expectedKeys.every((key) => Object.hasOwn(value, key));
+  }
+
+  function isValidExportProfile(profile) {
+    const profileKeys = [...PROFILE_KEYS, 'educationHistory', 'finalEducation'];
+    if (!hasExactKeys(profile, profileKeys)) return false;
+    if (!STRING_KEYS.every((key) => typeof profile[key] === 'string')) return false;
+    if (!Array.isArray(profile.researchKeywords)
+      || !profile.researchKeywords.every((keyword) => typeof keyword === 'string')) return false;
+    if (!hasExactKeys(profile.educationHistory, Object.keys(EDUCATION_HISTORY_FIELDS))) return false;
+    for (const [stage, fields] of Object.entries(EDUCATION_HISTORY_FIELDS)) {
+      const record = profile.educationHistory[stage];
+      if (!hasExactKeys(record, fields)
+        || !fields.every((key) => typeof record[key] === 'string')) return false;
+    }
+    if (!hasExactKeys(profile.finalEducation, ['level', 'completionStatus'])) return false;
+    if (typeof profile.finalEducation.level !== 'string'
+      || typeof profile.finalEducation.completionStatus !== 'string') return false;
+    if (profile.finalEducation.level
+      && !FINAL_EDUCATION_LEVELS.has(profile.finalEducation.level)) return false;
+    if (profile.finalEducation.completionStatus
+      && !FINAL_EDUCATION_COMPLETION_STATUSES.has(profile.finalEducation.completionStatus)) return false;
+    return true;
+  }
+
+  function createProfileExport(value) {
+    return {
+      format: PROFILE_EXPORT_FORMAT,
+      version: PROFILE_EXPORT_VERSION,
+      profile: normalizeProfile(value),
+    };
+  }
+
+  function serializeProfileExport(value) {
+    return `${JSON.stringify(createProfileExport(value), null, 2)}\n`;
+  }
+
+  function parseProfileImportJson(source) {
+    if (typeof source !== 'string') throw new Error('Invalid profile file');
+    let envelope;
+    try {
+      envelope = JSON.parse(source);
+    } catch (_error) {
+      throw new Error('Invalid profile file');
+    }
+    if (!hasExactKeys(envelope, ['format', 'version', 'profile'])
+      || envelope.format !== PROFILE_EXPORT_FORMAT
+      || envelope.version !== PROFILE_EXPORT_VERSION
+      || !isValidExportProfile(envelope.profile)) {
+      throw new Error('Invalid profile file');
+    }
+    return normalizeProfile(envelope.profile);
+  }
+
+  function createProfileStorage(storageArea) {
+    async function load() {
+      const stored = await storageArea.get('profile');
+      return normalizeProfile(stored && stored.profile);
+    }
+
+    async function save(value) {
+      const profile = normalizeProfile(value);
+      await storageArea.set({ profile });
+      return profile;
+    }
+
+    return {
+      load,
+      save,
+      async exportJson() {
+        return serializeProfileExport(await load());
       },
+      parseImportJson: parseProfileImportJson,
     };
   }
 
   return {
     PROFILE_KEYS,
+    PROFILE_EXPORT_FORMAT,
+    PROFILE_EXPORT_VERSION,
     normalizeProfile,
     createProfileStorage,
     normalizeEducationHistory,
     normalizeFinalEducation,
     resolveFinalEducationMonths,
+    createProfileExport,
+    serializeProfileExport,
+    parseProfileImportJson,
   };
 });
