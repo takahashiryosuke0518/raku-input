@@ -6,6 +6,7 @@ const {
   createProfileExport,
   serializeProfileExport,
   parseProfileImportJson,
+  normalizeProfile,
 } = require('../profile-storage.js');
 
 const PROFILE_KEYS = [
@@ -18,7 +19,8 @@ const PROFILE_KEYS = [
   'phoneNumber',
   'mobilePhone',
   'currentPostalCode',
-  'currentAddress',
+  'currentCity',
+  'currentStreet',
   'currentBuilding',
   'email',
   'birthDate',
@@ -70,6 +72,8 @@ const SAVED_PROFILE = {
   phoneNumber: '000-0000-0000',
   mobilePhone: '000-0000-0000',
   currentPostalCode: '0100001',
+  currentCity: '秋田市',
+  currentStreet: '山王1-1',
   currentAddress: '東京都千代田区千代田1-1',
   currentBuilding: '○○マンション101',
   email: 'example@example.com',
@@ -150,6 +154,10 @@ function createHarness(options = {}) {
             : String(profile[key] || '').trim(),
         ]),
       );
+      normalized.currentPostalCode = normalizeProfile({
+        currentPostalCode: normalized.currentPostalCode,
+      }).currentPostalCode;
+      normalized.currentAddress = String(profile.currentAddress || '').trim();
       normalized.educationHistory = Object.fromEntries(Object.entries(profile.educationHistory).map(
         ([stage, record]) => [stage, Object.fromEntries(Object.entries(record).map(
           ([key, value]) => [key, String(value || '').trim()],
@@ -267,7 +275,8 @@ test('saveProfile stores all fields, reapplies normalized values, and reports su
       phoneNumber: ' 000-0000-0000 ',
       mobilePhone: ' 000-0000-0000 ',
       currentPostalCode: ' 0100001 ',
-      currentAddress: ' 秋田市山王1-1 ',
+      currentCity: ' 秋田市 ',
+      currentStreet: ' 山王1-1 ',
       currentBuilding: ' 県庁マンション101 ',
       email: ' example@example.com ',
       birthDate: ' 2002-05-18 ',
@@ -319,7 +328,9 @@ test('saveProfile stores all fields, reapplies normalized values, and reports su
     phoneNumber: ' 000-0000-0000 ',
     mobilePhone: ' 000-0000-0000 ',
     currentPostalCode: ' 0100001 ',
-    currentAddress: ' 秋田市山王1-1 ',
+    currentCity: ' 秋田市 ',
+    currentStreet: ' 山王1-1 ',
+    currentAddress: SAVED_PROFILE.currentAddress,
     currentBuilding: ' 県庁マンション101 ',
     email: ' example@example.com ',
     birthDate: ' 2002-05-18 ',
@@ -355,6 +366,9 @@ test('saveProfile stores all fields, reapplies normalized values, and reports su
   assert.equal(harness.document.elements.familyName.value, '姓の値');
   assert.equal(harness.document.elements.birthDate.value, '2002-05-18');
   assert.equal(harness.document.elements.gender.value, '男性');
+  assert.equal(harness.document.elements.currentPostalCode.value, '010-0001');
+  assert.equal(harness.document.elements.currentCity.value, '秋田市');
+  assert.equal(harness.document.elements.currentStreet.value, '山王1-1');
   assert.equal(harness.document.elements.currentPrefecture.value, '秋田県');
   assert.equal(harness.document.elements.homePrefecture.value, '宮城県');
   assert.equal(harness.document.elements.masterGraduateSchoolName.value, '県立大学大学院');
@@ -401,7 +415,7 @@ test('importProfile validates, confirms, saves, and restores every imported fiel
 
   assert.deepEqual(harness.fileApi.readCalls, [file]);
   assert.equal(harness.fileApi.confirmCalls, 1);
-  assert.deepEqual(harness.storageApi.saveCalls, [imported]);
+  assert.deepEqual(harness.storageApi.saveCalls, [normalizeProfile(imported)]);
   assert.equal(harness.document.elements.familyName.value, 'test-imported-family');
   assert.equal(
     harness.document.elements.masterGraduateSchoolName.value,

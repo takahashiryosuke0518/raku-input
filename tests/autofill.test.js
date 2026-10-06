@@ -72,8 +72,13 @@ test('classifyField separates kana names and personal contact fields from other 
     [metadata({ labelTexts: ['携帯電話'] }), 'mobilePhone'],
     [metadata({ labelTexts: ['携帯番号'] }), 'mobilePhone'],
     [metadata({ labelTexts: ['郵便番号'] }), 'currentPostalCode'],
+    [metadata({ placeholder: '現住所(市区郡町村)' }), 'currentCity'],
+    [metadata({ labelTexts: ['municipality'] }), 'currentCity'],
+    [metadata({ placeholder: '現住所(町域・番地)' }), 'currentStreet'],
+    [metadata({ autocomplete: 'address-line1' }), 'currentStreet'],
     [metadata({ labelTexts: ['市区郡・地名・番地'] }), 'currentAddress'],
     [metadata({ labelTexts: ['建物名・部屋番号'] }), 'currentBuilding'],
+    [metadata({ autocomplete: 'address-line2' }), 'currentBuilding'],
     [metadata({ labelTexts: ['都道府県'] }), 'currentPrefecture'],
     [metadata({ labelTexts: ['E-mailアドレス'] }), 'email'],
     [metadata({ labelTexts: ['メールアドレス'] }), 'email'],
@@ -297,7 +302,12 @@ test('current address range uses sibling headings, syncs jqTransform, and exclud
     currentAddress: 'Current street',
     currentBuilding: 'Current building',
   });
-  assert.equal(result.filledCount, 5);
+  assert.equal(result.filledCount, 5, JSON.stringify({
+    postal: current[0].result.postal.map((control) => control.value),
+    prefecture: current[1].result.prefecture.value,
+    street: current[2].result['Street address'].value,
+    building: current[3].result.Building.value,
+  }));
   assert.deepEqual(current[0].result.postal.map((control) => control.value), ['123', '4567']);
   assert.equal(current[1].result.prefecture.value, 'pref-a');
   assert.equal(current[1].result.display.textContent, 'Prefecture A');
@@ -702,13 +712,20 @@ class FakeInput {
 }
 
 class FakeContainer {
-  constructor(tagName, { controls = [], labels = [], parentElement = null, children = [], textContent = '' } = {}) {
+  constructor(tagName, {
+    controls = [], labels = [], parentElement = null, children = [], textContent = '',
+    attributes = {}, hidden = false, inert = false, computedStyle = null,
+  } = {}) {
     this.tagName = tagName.toUpperCase();
     this.controls = controls;
     this.labels = labels;
     this.children = children;
     this.parentElement = parentElement;
     this.textContent = textContent;
+    this.attributes = { ...attributes };
+    this.hidden = hidden;
+    this.inert = inert;
+    this.computedStyle = computedStyle;
     this.previousElementSibling = null;
     for (const control of controls) control.parentElement = this;
     for (const label of labels) label.parentElement = this;
@@ -717,6 +734,10 @@ class FakeContainer {
       children[index].previousElementSibling = children[index - 1] || null;
       children[index].nextElementSibling = children[index + 1] || null;
     }
+  }
+
+  getAttribute(name) {
+    return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null;
   }
 
   querySelectorAll(selector) {
@@ -909,6 +930,9 @@ class FakeDocument {
       HTMLInputElement: FakeInput,
       HTMLSelectElement: FakeSelect,
       HTMLTextAreaElement: FakeTextArea,
+      getComputedStyle(element) {
+        return element.computedStyle || { display: 'block', visibility: 'visible' };
+      },
     };
     this.submitCalls = 0;
     this.requestSubmitCalls = 0;
@@ -3491,4 +3515,480 @@ test('compact and spaced English field names distinguish family name from given 
 test('generic English-name headings do not identify either individual field', () => {
   assert.equal(classifyField(metadata({ labelTexts: ['名前（英字）'] })), null);
   assert.equal(classifyField(metadata({ labelTexts: ['英字氏名'] })), null);
+});
+
+test('a unique compact form row contributes structured context without using a broad section text', () => {
+  const prefecture = new FakeSelect({ name: 'site-field' }, [
+    new FakeOption('', '選択してください'), new FakeOption('05', '秋田県'),
+  ]);
+  const heading = new FakeContainer('div', { textContent: '都道府県' });
+  const inputArea = new FakeContainer('div', { controls: [prefecture], children: [prefecture] });
+  const row = new FakeContainer('div', {
+    controls: [prefecture], children: [heading, inputArea],
+  });
+  new FakeContainer('section', {
+    children: [row], textContent: '現住所 休暇中の連絡先 その他多数',
+  });
+  const document = new FakeDocument([prefecture]);
+  const fieldMetadata = collectFieldMetadata(prefecture, document);
+
+  assert.deepEqual(fieldMetadata.contextTexts, ['都道府県']);
+  assert.equal(classifyControl(fieldMetadata)?.profileKey, 'currentPrefecture');
+  assert.deepEqual(fillDocument(document, { currentPrefecture: '秋田県' }), {
+    filledCount: 1, failedCount: 0,
+  });
+  assert.equal(prefecture.value, '05');
+});
+
+test('ambiguous compact row headings do not become structured context', () => {
+  const input = new FakeInput({ type: 'text' });
+  const inputArea = new FakeContainer('div', { controls: [input], children: [input] });
+  new FakeContainer('div', {
+    controls: [input],
+    children: [
+      new FakeContainer('div', { textContent: '市区郡町村' }),
+      new FakeContainer('div', { textContent: '町域・番地' }),
+      inputArea,
+    ],
+  });
+
+  assert.deepEqual(collectFieldMetadata(input, new FakeDocument([input])).contextTexts, []);
+});
+
+test('postal code fills one field or a structured three-plus-four group and rejects invalid lengths', () => {
+  const single = new FakeInput({ type: 'text', placeholder: '郵便番号' });
+  assert.deepEqual(fillDocument(new FakeDocument([single]), {
+    currentPostalCode: '0150000',
+  }), { filledCount: 1, failedCount: 0 });
+  assert.equal(single.value, '015-0000');
+
+  const first = new FakeInput({ type: 'text' });
+  const second = new FakeInput({ type: 'text' });
+  const search = new FakeInput({ type: 'button' });
+  search.clicks = 0;
+  search.click = () => { search.clicks += 1; };
+  const inputArea = new FakeContainer('div', {
+    controls: [first, second, search], children: [first, second, search],
+  });
+  new FakeContainer('div', {
+    controls: [first, second, search],
+    children: [new FakeContainer('div', { textContent: '郵便番号' }), inputArea],
+  });
+  const splitDocument = new FakeDocument([first, second, search]);
+  assert.deepEqual(fillDocument(splitDocument, {
+    currentPostalCode: '015-0000',
+  }), { filledCount: 2, failedCount: 0 });
+  assert.deepEqual([first.value, second.value], ['015', '0000']);
+  assert.equal(search.clicks, 0);
+  assert.deepEqual([splitDocument.submitCalls, splitDocument.requestSubmitCalls], [0, 0]);
+
+  for (const invalid of ['123456', '12345678', '123-45678']) {
+    const target = new FakeInput({ type: 'text', placeholder: '郵便番号' }, { value: 'existing' });
+    assert.deepEqual(fillDocument(new FakeDocument([target]), {
+      currentPostalCode: invalid,
+    }), { filledCount: 0, failedCount: 0 });
+    assert.equal(target.value, 'existing');
+  }
+});
+
+test('split current address fields use only their matching profile components', () => {
+  const city = new FakeInput({ type: 'text', placeholder: '現住所(市区郡町村)' });
+  const street = new FakeInput({ type: 'text', placeholder: '現住所(町域・番地)' });
+  const building = new FakeInput({ type: 'text', placeholder: '現住所(建物名・部屋番号)' });
+  const document = new FakeDocument([city, street, building]);
+
+  assert.deepEqual(fillDocument(document, {
+    currentCity: '秋田市',
+    currentStreet: '山王1-1',
+    currentAddress: '旧住所を混ぜない',
+    currentBuilding: '県庁マンション101',
+  }), { filledCount: 3, failedCount: 0 });
+  assert.deepEqual(
+    [city.value, street.value, building.value],
+    ['秋田市', '山王1-1', '県庁マンション101'],
+  );
+});
+
+test('legacy combined address uses new components exclusively before currentAddress fallback', () => {
+  const cases = [
+    [{ currentCity: '○○市', currentStreet: '△△1-2-3', currentAddress: '旧住所' }, '○○市△△1-2-3'],
+    [{ currentCity: '○○市', currentStreet: '', currentAddress: '旧住所' }, '○○市'],
+    [{ currentCity: '', currentStreet: '△△1-2-3', currentAddress: '旧住所' }, '△△1-2-3'],
+    [{ currentCity: '', currentStreet: '', currentAddress: '旧住所' }, '旧住所'],
+  ];
+  for (const [profile, expected] of cases) {
+    const input = new FakeInput({ type: 'text', id: 'combined-address' });
+    const document = new FakeDocument(
+      [input], [new FakeLabel('市区郡・地名・番地', 'combined-address')],
+    );
+    assert.deepEqual(fillDocument(document, profile), { filledCount: 1, failedCount: 0 });
+    assert.equal(input.value, expected);
+  }
+});
+
+test('legacy currentAddress is never parsed into split city or street fields', () => {
+  const city = new FakeInput(
+    { type: 'text', placeholder: '市区郡町村' }, { value: 'existing city' },
+  );
+  const street = new FakeInput(
+    { type: 'text', placeholder: '町域・番地' }, { value: 'existing street' },
+  );
+
+  assert.deepEqual(fillDocument(new FakeDocument([city, street]), {
+    currentAddress: '秋田市山王1-1',
+  }), { filledCount: 0, failedCount: 0 });
+  assert.deepEqual([city.value, street.value], ['existing city', 'existing street']);
+});
+
+test('current and home prefectures stay within their explicit address scopes', () => {
+  const current = new FakeSelect({}, [
+    new FakeOption('current-akita', '秋田県'), new FakeOption('current-miyagi', '宮城県'),
+  ]);
+  const home = new FakeSelect({}, [
+    new FakeOption('home-akita', '秋田県'), new FakeOption('home-miyagi', '宮城県'),
+  ]);
+  const wrongCurrentInHome = new FakeSelect({ name: 'currentPrefecture' }, [
+    new FakeOption('wrong-akita', '秋田県'), new FakeOption('wrong-miyagi', '宮城県'),
+  ]);
+  const makeRow = (headingText, control) => {
+    const inputArea = new FakeContainer('div', { controls: [control], children: [control] });
+    return new FakeContainer('div', {
+      controls: [control],
+      children: [new FakeContainer('div', { textContent: headingText }), inputArea],
+    });
+  };
+  const currentRow = makeRow('都道府県', current);
+  const homeRow = makeRow('都道府県', home);
+  const wrongRow = makeRow('都道府県', wrongCurrentInHome);
+  new FakeContainer('section', {
+    children: [currentRow], attributes: { 'aria-label': '現住所' },
+  });
+  new FakeContainer('section', {
+    children: [homeRow, wrongRow],
+    attributes: { 'aria-label': 'home address' },
+  });
+  const document = new FakeDocument([current, home, wrongCurrentInHome]);
+
+  assert.deepEqual(fillDocument(document, {
+    currentPrefecture: '秋田県', homePrefecture: '宮城県',
+  }), { filledCount: 2, failedCount: 0 });
+  assert.equal(current.value, 'current-akita');
+  assert.equal(home.value, 'home-miyagi');
+  assert.equal(wrongCurrentInHome.value, '');
+});
+
+test('home address scope does not turn a detailed home address input into homePrefecture', () => {
+  for (const placeholder of ['帰省先住所', '休暇中の連絡先住所', 'home address']) {
+    const input = new FakeInput({ type: 'text', placeholder }, { value: 'existing home address' });
+    const document = new FakeDocument([input]);
+    assert.deepEqual(fillDocument(document, { homePrefecture: '宮城県' }), {
+      filledCount: 0, failedCount: 0,
+    });
+    assert.equal(input.value, 'existing home address');
+  }
+});
+
+test('inactive overseas address branch is ignored for all split current address fields', () => {
+  const controls = [
+    new FakeInput({ type: 'text', placeholder: '郵便番号' }),
+    new FakeInput({ type: 'text', placeholder: '現住所(市区郡町村)' }),
+    new FakeInput({ type: 'text', placeholder: '現住所(町域・番地)' }),
+    new FakeInput({ type: 'text', placeholder: '現住所(建物名・部屋番号)' }),
+  ];
+  new FakeContainer('div', {
+    controls,
+    children: controls,
+    computedStyle: { display: 'none', visibility: 'visible' },
+  });
+
+  assert.deepEqual(fillDocument(new FakeDocument(controls), {
+    currentPostalCode: '015-0000', currentCity: '秋田市', currentStreet: '山王1-1',
+    currentBuilding: '県庁マンション101',
+  }), { filledCount: 0, failedCount: 0 });
+  assert.deepEqual(controls.map((control) => control.value), ['', '', '', '']);
+});
+
+test('empty split address profile values preserve existing form values', () => {
+  const controls = [
+    new FakeInput({ type: 'text', placeholder: '郵便番号' }, { value: '999-9999' }),
+    new FakeInput({ type: 'text', placeholder: '現住所(市区郡町村)' }, { value: '入力済み市区町村' }),
+    new FakeInput({ type: 'text', placeholder: '現住所(町域・番地)' }, { value: '入力済み番地' }),
+    new FakeInput({ type: 'text', placeholder: '現住所(建物名・部屋番号)' }, { value: '入力済み建物' }),
+  ];
+
+  assert.deepEqual(fillDocument(new FakeDocument(controls), {
+    currentPostalCode: '', currentCity: '', currentStreet: '', currentBuilding: '',
+  }), { filledCount: 0, failedCount: 0 });
+  assert.deepEqual(
+    controls.map((control) => control.value),
+    ['999-9999', '入力済み市区町村', '入力済み番地', '入力済み建物'],
+  );
+});
+
+test('vacation and emergency contact wording remains negative evidence for email', () => {
+  for (const placeholder of ['休暇中の連絡先メールアドレス', '緊急連絡先 email']) {
+    assert.equal(classifyField(metadata({ placeholder, inputType: 'email' })), null);
+  }
+});
+
+test('active branch semantic fixture stays minimal and anonymous', () => {
+  const html = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'active-branch-semantic-form.html'),
+    'utf8',
+  );
+  assert.match(html, /name="kanji_sei"/);
+  assert.match(html, /name="birth_Y"/);
+  assert.match(html, /style="display: none"/);
+  assert.match(html, /学校名の頭文字/);
+  assert.match(html, /メールアドレス2/);
+  assert.doesNotMatch(html, /nikon|axol|https?:\/\//i);
+  assert.ok(html.length < 4000);
+});
+
+test('direct name metadata outranks contradictory weak nearby labels symmetrically', () => {
+  const cases = [
+    [{ name: 'kanji_sei', placeholder: '漢字姓', labelTexts: ['漢字姓'], nearLabelTexts: ['漢字姓', '漢字名'] }, 'familyName'],
+    [{ name: 'kanji_na', placeholder: '漢字名', labelTexts: ['漢字名'], nearLabelTexts: ['漢字姓', '漢字名'] }, 'givenName'],
+    [{ name: 'kana_sei', placeholder: 'カナ姓', labelTexts: ['カナ姓'], nearLabelTexts: ['カナ姓', 'カナ名'] }, 'familyNameKana'],
+    [{ name: 'kana_na', placeholder: 'カナ名', labelTexts: ['カナ名'], nearLabelTexts: ['カナ姓', 'カナ名'] }, 'givenNameKana'],
+    [{ name: 'roma_sei', placeholder: 'ローマ字姓', labelTexts: ['ローマ字姓'], nearLabelTexts: ['ローマ字姓', 'ローマ字名'] }, 'familyNameLatin'],
+    [{ name: 'roma_na', placeholder: 'ローマ字名', labelTexts: ['ローマ字名'], nearLabelTexts: ['ローマ字姓', 'ローマ字名'] }, 'givenNameLatin'],
+  ];
+
+  for (const [hints, expected] of cases) {
+    assert.equal(classifyField(metadata(hints)), expected, JSON.stringify(hints));
+  }
+});
+
+test('inactive ancestor states exclude controls and do not contribute to success count', () => {
+  const controls = [
+    new FakeInput({ name: 'last_name' }),
+    new FakeInput({ name: 'first_name' }),
+    new FakeInput({ name: 'email', type: 'email' }),
+    new FakeInput({ 'aria-label': '電話番号', type: 'tel' }),
+    new FakeInput({ 'aria-label': '携帯電話番号', type: 'tel' }),
+  ];
+  new FakeContainer('div', { controls: [controls[0]], hidden: true });
+  new FakeContainer('div', { controls: [controls[1]], inert: true });
+  new FakeContainer('div', {
+    controls: [controls[2]], computedStyle: { display: 'none', visibility: 'visible' },
+  });
+  new FakeContainer('div', {
+    controls: [controls[3]], computedStyle: { display: 'block', visibility: 'hidden' },
+  });
+  new FakeContainer('div', {
+    controls: [controls[4]], computedStyle: { display: 'block', visibility: 'collapse' },
+  });
+  const document = new FakeDocument(controls, [new FakeLabel('メールアドレス', '')]);
+
+  assert.deepEqual(fillDocument(document, {
+    familyNameLatin: 'FAMILY',
+    givenNameLatin: 'Given',
+    email: 'sample@example.com',
+    phoneNumber: '03-1234-5678',
+    mobilePhone: '090-1234-5678',
+  }), { filledCount: 0, failedCount: 0 });
+  assert.deepEqual(controls.map((control) => control.value), ['', '', '', '', '']);
+});
+
+test('display none alternative postal and telephone branch stays untouched', () => {
+  const postal = new FakeInput({ 'aria-label': '郵便番号' });
+  const fixed = new FakeInput({ 'aria-label': '電話番号', type: 'tel' });
+  const mobile = new FakeInput({ 'aria-label': '携帯電話番号', type: 'tel' });
+  new FakeContainer('section', {
+    controls: [postal, fixed, mobile],
+    computedStyle: { display: 'none', visibility: 'visible' },
+  });
+  const document = new FakeDocument([postal, fixed, mobile]);
+
+  assert.deepEqual(fillDocument(document, {
+    currentPostalCode: '010-0001',
+    phoneNumber: '03-1234-5678',
+    mobilePhone: '090-1234-5678',
+  }), { filledCount: 0, failedCount: 0 });
+  assert.deepEqual([postal.value, fixed.value, mobile.value], ['', '', '']);
+});
+
+test('styled native select and radio remain usable when only the controls are display none', () => {
+  const select = new FakeSelect({ name: 'gender' }, [
+    new FakeOption('', '選択してください'), new FakeOption('female', '女性'),
+  ]);
+  select.computedStyle = { display: 'none', visibility: 'visible' };
+  const male = new FakeInput({ id: 'styled-male', name: 'styled-gender', type: 'radio' });
+  const female = new FakeInput({ id: 'styled-female', name: 'styled-gender', type: 'radio' });
+  male.computedStyle = { display: 'none', visibility: 'visible' };
+  female.computedStyle = { display: 'none', visibility: 'visible' };
+  const group = new FakeContainer('div', {
+    controls: [male, female], attributes: { role: 'group' },
+  });
+  male.parentElement = group;
+  female.parentElement = group;
+  const labels = [
+    new FakeLabel('男性', 'styled-male'),
+    new FakeLabel('女性', 'styled-female'),
+  ];
+  const document = new FakeDocument([select, male, female], labels);
+
+  assert.deepEqual(fillDocument(document, { gender: '女性' }), {
+    filledCount: 2, failedCount: 0,
+  });
+  assert.equal(select.value, 'female');
+  assert.equal(female.checked, true);
+});
+
+test('semantic birth names require both birth meaning and a component token', () => {
+  const cases = [
+    ['birth_Y', 'year'],
+    ['birth-year', 'year'],
+    ['birthYear', 'year'],
+    ['birthday_month', 'month'],
+    ['birthdayMonth', 'month'],
+    ['dobDay', 'day'],
+    ['dateofbirth_d', 'day'],
+  ];
+  for (const [name, segment] of cases) {
+    assert.deepEqual(classifyControl(metadata({ name, tagName: 'select' })), {
+      profileKey: 'birthDate', segment,
+    });
+  }
+  for (const name of ['Y', 'm', 'd', 'year', 'month', 'day']) {
+    assert.equal(classifyControl(metadata({ name, tagName: 'select' })), null);
+  }
+});
+
+test('semantic birth year month day selects fill with padded and unpadded options', () => {
+  const year = new FakeSelect({ name: 'birth_Y' }, [
+    new FakeOption('', '年'), new FakeOption('2002', '2002年'),
+  ]);
+  const month = new FakeSelect({ name: 'birthdayMonth' }, [
+    new FakeOption('', '月'), new FakeOption('5', '5月'),
+  ]);
+  const day = new FakeSelect({ name: 'dob-day' }, [
+    new FakeOption('', '日'), new FakeOption('05', '05日'),
+  ]);
+  const document = new FakeDocument([year, month, day]);
+
+  assert.deepEqual(fillDocument(document, { birthDate: '2002-05-05' }), {
+    filledCount: 3, failedCount: 0,
+  });
+  assert.deepEqual([year.value, month.value, day.value], ['2002', '5', '05']);
+});
+
+test('active fixed and mobile three-part logical groups fill before individual controls', () => {
+  const fixed = [
+    new FakeInput({ type: 'tel', 'aria-label': '固定電話 市外局番' }),
+    new FakeInput({ type: 'tel', 'aria-label': '市内局番' }),
+    new FakeInput({ type: 'tel', 'aria-label': '加入者番号' }),
+  ];
+  const mobile = [
+    new FakeInput({ type: 'tel', 'aria-label': '携帯電話識別番号' }),
+    new FakeInput({ type: 'tel', 'aria-label': '事業者識別番号' }),
+    new FakeInput({ type: 'tel', 'aria-label': '加入者番号' }),
+  ];
+  new FakeContainer('div', { controls: fixed });
+  new FakeContainer('div', { controls: mobile });
+  const hiddenAlternative = new FakeInput({ type: 'tel', 'aria-label': '携帯電話番号（海外）' });
+  new FakeContainer('div', {
+    controls: [hiddenAlternative],
+    computedStyle: { display: 'none', visibility: 'visible' },
+  });
+  const document = new FakeDocument([...fixed, ...mobile, hiddenAlternative]);
+
+  assert.deepEqual(fillDocument(document, {
+    phoneNumber: '03-1234-5678',
+    mobilePhone: '090-2345-6789',
+  }), { filledCount: 6, failedCount: 0 });
+  assert.deepEqual(fixed.map((control) => control.value), ['03', '1234', '5678']);
+  assert.deepEqual(mobile.map((control) => control.value), ['090', '2345', '6789']);
+  assert.equal(hiddenAlternative.value, '');
+});
+
+test('partially failed split phone group counts only controls that reached their target', () => {
+  const fields = [
+    new FakeInput({ type: 'tel', 'aria-label': '携帯電話識別番号' }),
+    new FakeInput({ type: 'tel', 'aria-label': '事業者識別番号' }, { failOnSet: true }),
+    new FakeInput({ type: 'tel', 'aria-label': '加入者番号' }),
+  ];
+  new FakeContainer('div', { controls: fields });
+  const document = new FakeDocument(fields);
+
+  assert.deepEqual(fillDocument(document, { mobilePhone: '090-1234-5678' }), {
+    filledCount: 1, failedCount: 0,
+  });
+  assert.deepEqual(fields.map((control) => control.value), ['090', '', '']);
+});
+
+test('a three-control phone group accepts only text and tel members', () => {
+  const fields = [
+    new FakeInput({ type: 'tel', 'aria-label': '携帯電話識別番号' }),
+    new FakeInput({ type: 'email', 'aria-label': '事業者識別番号' }),
+    new FakeInput({ type: 'tel', 'aria-label': '加入者番号' }),
+  ];
+  new FakeContainer('div', { controls: fields });
+  const document = new FakeDocument(fields);
+
+  assert.deepEqual(fillDocument(document, { mobilePhone: '090-1234-5678' }), {
+    filledCount: 1, failedCount: 0,
+  });
+  assert.deepEqual(fields.map((control) => control.value), ['090-1234-5678', '', '']);
+});
+
+test('school search helpers are negative evidence only for schoolName', () => {
+  assert.equal(classifyField(metadata({ labelTexts: ['学校名'] })), 'schoolName');
+  for (const hint of ['学校名の頭文字', '頭文字', 'initial', '学校検索', 'search', '絞り込み', 'filter']) {
+    assert.notEqual(classifyField(metadata({ name: hint, placeholder: hint, labelTexts: [hint] })), 'schoolName');
+  }
+  assert.equal(classifyField(metadata({ name: 'initial', placeholder: 'first name' })), 'givenNameLatin');
+});
+
+test('primary and explicit confirmation email fill while a numbered alternate stays unchanged', () => {
+  const primary = new FakeInput({
+    id: 'primary-email', name: 'email', type: 'email', placeholder: 'メールアドレス',
+  });
+  const confirmation = new FakeInput({
+    id: 'confirmation-email', name: 'email2', type: 'email', placeholder: '確認用',
+  });
+  const alternate = new FakeInput({
+    id: 'alternate-email', name: 'secondary_email', type: 'email', placeholder: 'メールアドレス2',
+  });
+  const labels = [
+    new FakeLabel('メールアドレス', 'primary-email'),
+    new FakeLabel('確認用', 'confirmation-email'),
+    new FakeLabel('メールアドレス2', 'alternate-email'),
+  ];
+  const document = new FakeDocument([primary, confirmation, alternate], labels);
+
+  assert.deepEqual(fillDocument(document, { email: 'sample@example.com' }), {
+    filledCount: 2, failedCount: 0,
+  });
+  assert.deepEqual(
+    [primary.value, confirmation.value, alternate.value],
+    ['sample@example.com', 'sample@example.com', ''],
+  );
+});
+
+test('success count requires the post-event value to remain at the target', () => {
+  const reverting = new FakeInput({ name: 'last_name' }, {
+    value: 'ORIGINAL',
+    onEvent(_event, control) { control.value = 'ORIGINAL'; },
+  });
+  const excluded = ['hidden', 'button', 'submit', 'reset', 'image']
+    .map((type) => new FakeInput({ type, name: 'last_name' }));
+  const document = new FakeDocument([reverting, ...excluded]);
+
+  assert.deepEqual(fillDocument(document, { familyNameLatin: 'TARGET' }), {
+    filledCount: 0, failedCount: 0,
+  });
+  assert.equal(reverting.value, 'ORIGINAL');
+  assert.deepEqual(excluded.map((control) => control.value), ['', '', '', '', '']);
+});
+
+test('an already matching eligible value keeps the existing success count behavior', () => {
+  const input = new FakeInput({ name: 'last_name' }, { value: 'SAME' });
+  const document = new FakeDocument([input]);
+
+  assert.deepEqual(fillDocument(document, { familyNameLatin: 'SAME' }), {
+    filledCount: 1, failedCount: 0,
+  });
+  assert.deepEqual(input.events.map((event) => event.type), ['input', 'change']);
 });

@@ -19,6 +19,8 @@
     'phoneNumber',
     'mobilePhone',
     'currentPostalCode',
+    'currentCity',
+    'currentStreet',
     'currentAddress',
     'currentBuilding',
     'email',
@@ -41,6 +43,9 @@
   ]);
 
   const STRING_KEYS = PROFILE_KEYS.filter((key) => key !== 'researchKeywords');
+  const LEGACY_PROFILE_KEYS = PROFILE_KEYS.filter((key) => (
+    !['currentCity', 'currentStreet'].includes(key)
+  ));
 
   const EDUCATION_HISTORY_FIELDS = Object.freeze({
     middleSchool: ['schoolName', 'enrollmentMonth', 'graduationMonth'],
@@ -118,7 +123,9 @@
     const profile = Object.fromEntries(
       STRING_KEYS.map((key) => [
         key,
-        typeof source[key] === 'string' ? source[key].trim() : '',
+        key === 'currentPostalCode'
+          ? normalizePostalCode(source[key])
+          : (typeof source[key] === 'string' ? source[key].trim() : ''),
       ]),
     );
     profile.researchKeywords = Array.isArray(source.researchKeywords)
@@ -130,6 +137,15 @@
     profile.educationHistory = normalizeEducationHistory(source.educationHistory);
     profile.finalEducation = normalizeFinalEducation(source.finalEducation);
     return profile;
+  }
+
+  function normalizePostalCode(value) {
+    if (typeof value !== 'string') return '';
+    const trimmed = value.normalize('NFKC').trim();
+    const digits = /^\d{7}$/.test(trimmed)
+      ? trimmed
+      : (/^\d{3}-\d{4}$/.test(trimmed) ? trimmed.replace('-', '') : '');
+    return digits ? `${digits.slice(0, 3)}-${digits.slice(3)}` : trimmed;
   }
 
   function isPlainObject(value) {
@@ -146,9 +162,14 @@
   }
 
   function isValidExportProfile(profile) {
-    const profileKeys = [...PROFILE_KEYS, 'educationHistory', 'finalEducation'];
-    if (!hasExactKeys(profile, profileKeys)) return false;
-    if (!STRING_KEYS.every((key) => typeof profile[key] === 'string')) return false;
+    const currentKeys = [...PROFILE_KEYS, 'educationHistory', 'finalEducation'];
+    const legacyKeys = [...LEGACY_PROFILE_KEYS, 'educationHistory', 'finalEducation'];
+    const profileKeys = hasExactKeys(profile, currentKeys)
+      ? PROFILE_KEYS
+      : (hasExactKeys(profile, legacyKeys) ? LEGACY_PROFILE_KEYS : null);
+    if (!profileKeys) return false;
+    if (!profileKeys.filter((key) => key !== 'researchKeywords')
+      .every((key) => typeof profile[key] === 'string')) return false;
     if (!Array.isArray(profile.researchKeywords)
       || !profile.researchKeywords.every((keyword) => typeof keyword === 'string')) return false;
     if (!hasExactKeys(profile.educationHistory, Object.keys(EDUCATION_HISTORY_FIELDS))) return false;

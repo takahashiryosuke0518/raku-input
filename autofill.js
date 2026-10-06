@@ -19,6 +19,8 @@
     'phoneNumber',
     'mobilePhone',
     'currentPostalCode',
+    'currentCity',
+    'currentStreet',
     'currentAddress',
     'currentBuilding',
     'email',
@@ -49,6 +51,10 @@
     'laboratoryEndMonth',
   ]);
   const DATE_PROFILE_KEYS = new Set(['birthDate', ...MONTH_PROFILE_KEYS]);
+  const ADDRESS_PROFILE_KEYS = new Set([
+    'currentPostalCode', 'currentPrefecture', 'currentCity', 'currentStreet',
+    'currentAddress', 'currentBuilding', 'homePrefecture',
+  ]);
 
   function normalizeHint(value) {
     return String(value || '')
@@ -82,11 +88,13 @@
     };
   }
 
-  function isUnrelatedHint(hint, allowAddress = false) {
+  function isUnrelatedHint(hint, allowAddress = false, allowAlternateAddress = false) {
     const compactHint = hint.replace(/\s/g, '');
+    const alternateContact = /休暇中|休暇連絡先|緊急連絡先/.test(compactHint);
+    const emailLike = /メール|email|mail/.test(hint);
     return (
       /会社名|法人名|ユーザー名|ユーザ名/.test(compactHint)
-      || /休暇中|休暇連絡先|緊急連絡先/.test(compactHint)
+      || (alternateContact && (emailLike || !allowAlternateAddress))
       || /携帯アドレス|携帯メール|mobile email|mobile mail/.test(hint)
       || /(^| )(company|organization|username|user name)($| )/.test(hint)
       || (!allowAddress && /(^| )address($| )/.test(hint))
@@ -99,11 +107,21 @@
 
   function allowsAddressHint(match) {
     return isPrefectureMatch(match)
-      || ['email', 'currentPostalCode', 'currentAddress', 'currentBuilding'].includes(match);
+      || [
+        'email', 'currentPostalCode', 'currentCity', 'currentStreet',
+        'currentAddress', 'currentBuilding',
+      ].includes(match);
   }
 
   function createScores() {
     return Object.fromEntries(PROFILE_KEYS.map((key) => [key, 0]));
+  }
+
+  function isSchoolNameHelperHint(hint) {
+    const compact = String(hint || '').replace(/\s/g, '');
+    return /学校名の?頭文字|(^|学校)頭文字|学校.*(?:検索|絞り込み)/.test(compact)
+      || /(^| )(?:school ?name )?initial($| )/.test(hint)
+      || /(^| )(?:school )?(?:search|filter)($| )/.test(hint);
   }
 
   function scoreHints(hints) {
@@ -113,8 +131,27 @@
     };
 
     for (const hint of hints) {
+      const compactHint = hint.replace(/\s/g, '');
       if (/携帯アドレス|携帯メール|mobile email|mobile mail/.test(hint)) {
         continue;
+      }
+      if (/^(漢字姓|姓漢字|kanjisei|seikanji)$/.test(compactHint)) {
+        score('familyName', 350);
+      }
+      if (/^(漢字名|名漢字|kanjina|nakanji)$/.test(compactHint)) {
+        score('givenName', 350);
+      }
+      if (/^(カナ姓|姓カナ|kanasei|seikana)$/.test(compactHint)) {
+        score('familyNameKana', 350);
+      }
+      if (/^(カナ名|名カナ|kanana|nakana)$/.test(compactHint)) {
+        score('givenNameKana', 350);
+      }
+      if (/^(ローマ字姓|英字姓|romasei|seiroma)$/.test(compactHint)) {
+        score('familyNameLatin', 350);
+      }
+      if (/^(ローマ字名|英字名|romana|naroma)$/.test(compactHint)) {
+        score('givenNameLatin', 350);
       }
       if (/^(セイ|姓カナ|姓 カナ)$|フリガナ 姓|ふりがな 姓|(^| )(family name kana|surname kana)($| )/.test(hint)) {
         score('familyNameKana', 350);
@@ -133,11 +170,23 @@
       if (/郵便番号|postal code|postcode|zip code/.test(hint)) {
         score('currentPostalCode', 350);
       }
-      if (/建物名|マンション名|アパート名|部屋番号|号室|building|apartment|room number/.test(hint)) {
+      if (/建物名|マンション名|アパート名|部屋番号|号室|building|apartment|room number|address line ?2/.test(hint)) {
         score('currentBuilding', 350);
-      } else if (/市区郡|市区町村|町名|地名|番地|住所|address line 1|street address/.test(hint)
-        && !/^(現住所|current address|residential address)$/.test(hint)) {
-        score('currentAddress', 300);
+      } else {
+        const combinedAddress = /市区郡.*(?:地名|町域|番地)|市区町村.*番地/.test(hint)
+          || /(^| )(住所|street address)($| )/.test(hint);
+        if (combinedAddress) {
+          score('currentAddress', 350);
+        } else {
+          if (/市区郡町村|市区町村/.test(hint)
+            || /(^| )(city|municipality|address level ?2)($| )/.test(hint)) {
+            score('currentCity', 350);
+          }
+          if (/町域|番地|町名|地名/.test(hint)
+            || /(^| )(street|address line ?1)($| )/.test(hint)) {
+            score('currentStreet', 350);
+          }
+        }
       }
       if (/メールアドレス|e mailアドレス|(^| )(e mail|email|mail)( |$)/.test(hint)) {
         score('email', 250);
@@ -178,7 +227,10 @@
       if (/性別/.test(hint) || /(^| )(gender|sex)($| )/.test(hint)) {
         score('gender');
       }
-      if (/帰省先|実家|出身地/.test(hint)
+      const explicitHomePrefecture = /^(帰省先|実家|出身地)$/.test(compactHint)
+        || /(?:帰省先|実家|出身地|休暇中の連絡先|休暇連絡先).*都道府県/.test(compactHint)
+        || /都道府県.*(?:帰省先|実家|出身地|休暇中の連絡先|休暇連絡先)/.test(compactHint);
+      if (explicitHomePrefecture
         || /(^| )(home ?town|home prefecture)($| )/.test(hint)) {
         score('homePrefecture', 300);
       }
@@ -248,26 +300,70 @@
       }
     }
 
+    if (hints.some(isSchoolNameHelperHint)) scores.schoolName = 0;
+
     return scores;
   }
 
   function resolveScores(scores) {
     const highest = Math.max(...Object.values(scores));
     if (highest === 0) {
-      return { hasEvidence: false, match: null };
+      return { hasEvidence: false, match: null, score: 0 };
     }
     const matches = Object.keys(scores).filter((key) => scores[key] === highest);
-    return { hasEvidence: true, match: matches.length === 1 ? matches[0] : null };
+    return { hasEvidence: true, match: matches.length === 1 ? matches[0] : null, score: highest };
+  }
+
+  function semanticBirthComponent(hints) {
+    const segments = new Set();
+    for (const hint of hints) {
+      const words = String(hint || '').split(/\s+/).filter(Boolean);
+      const compact = words.join('');
+      const hasBirthMeaning = words.some((word) => (
+        ['birth', 'birthday', 'birthdate', 'dateofbirth', 'dob'].includes(word)
+      )) || /date of birth/.test(hint) || /^(?:birth|birthday|birthdate|dateofbirth|dob)/.test(compact);
+      if (!hasBirthMeaning) continue;
+
+      let component = null;
+      const birthMeanings = ['birth', 'birthday', 'birthdate', 'dateofbirth', 'dob'];
+      for (const [segment, tokens] of [
+        ['year', ['year', 'y']],
+        ['month', ['month', 'm']],
+        ['day', ['day', 'd']],
+      ]) {
+        if (words.some((word) => tokens.includes(word))
+          || (!birthMeanings.includes(compact)
+            && tokens.some((token) => birthMeanings.some((meaning) => compact === `${meaning}${token}`)))) {
+          if (component && component !== segment) return { segment: null, conflict: true };
+          component = segment;
+        }
+      }
+      if (component) segments.add(component);
+    }
+    return segments.size === 1
+      ? { segment: [...segments][0], conflict: false }
+      : { segment: null, conflict: segments.size > 1 };
   }
 
   function classificationForHints(hints, metadata) {
-    const result = resolveScores(scoreHints(hints));
+    const semanticBirth = semanticBirthComponent(hints);
+    if (semanticBirth.conflict) return {
+      hasEvidence: true, match: null, segment: null, score: 400,
+    };
+    const scores = scoreHints(hints);
+    if (semanticBirth.segment) scores.birthDate = Math.max(scores.birthDate, 400);
+    const result = resolveScores(scores);
     if (!result.hasEvidence || !result.match) {
       return result;
     }
 
     const source = metadata && typeof metadata === 'object' ? metadata : {};
-    return { hasEvidence: true, match: result.match, segment: null };
+    return {
+      hasEvidence: true,
+      match: result.match,
+      segment: result.match === 'birthDate' ? semanticBirth.segment : null,
+      score: result.score,
+    };
   }
 
   function dateSegmentFromHints(hints) {
@@ -287,13 +383,14 @@
 
   function classifyControl(metadata) {
     const groups = metadataHintGroups(metadata);
-    const primaryHints = [...groups.fieldSpecific, ...groups.directLabels, ...groups.nearLabels];
     const groupHints = [...groups.fieldsets, ...groups.contexts];
     const kanaContext = groupHints.some((hint) => /カナ|ふりがな|フリガナ|kana/.test(hint));
     const kanjiContext = groupHints.some((hint) => /漢字|kanji/.test(hint));
-    const localNameHints = [...groups.directLabels, ...groups.nearLabels];
-    const hasFamilyLabel = localNameHints.some((hint) => /^(姓|せい|セイ)$/.test(hint));
-    const hasGivenLabel = localNameHints.some((hint) => /^(名|めい|メイ)$/.test(hint));
+    const localLabels = groups.nearLabels.length === 1 ? groups.nearLabels : [];
+    const weakNearbyLabels = groups.nearLabels.length > 1 ? groups.nearLabels : [];
+    const nameLabels = [...groups.directLabels, ...localLabels];
+    const hasFamilyLabel = nameLabels.some((hint) => /^(姓|せい|セイ)$/.test(hint));
+    const hasGivenLabel = nameLabels.some((hint) => /^(名|めい|メイ)$/.test(hint));
     const autocompleteNameKey = !kanaContext && !kanjiContext
       ? (hasFamilyLabel && groups.autocomplete.includes('family name'))
         ? 'familyName'
@@ -301,27 +398,61 @@
           ? 'givenName'
           : null
       : null;
-    const contextualNameKey = kanaContext === kanjiContext
-      ? autocompleteNameKey
+    const contextualNameKey = (hints) => kanaContext === kanjiContext
+      ? null
       : kanaContext
-        ? kanaNameKeyForLocalHints(localNameHints)
-        : kanjiNameKeyForLocalHints(localNameHints);
-    const hasUnqualifiedFamilyOrGivenLabel = localNameHints.some((hint) => /^(姓|名)$/.test(hint));
-    const hasJapaneseNameFieldHint = groups.fieldSpecific.some((hint) => (
-      /(^| )(family name|surname|last name|given name|first name) (ja|japanese)($| )/.test(hint)
-    ));
-    if (hasUnqualifiedFamilyOrGivenLabel && !kanaContext && !kanjiContext
-      && !hasJapaneseNameFieldHint && !autocompleteNameKey) {
-      return null;
+        ? kanaNameKeyForLocalHints(hints)
+        : kanjiNameKeyForLocalHints(hints);
+    const evidenceTiers = [
+      {
+        hints: groups.autocomplete,
+        forcedMatch: autocompleteNameKey,
+        blocksOnUnrelated: true,
+      },
+      { hints: groups.fieldSpecific, forcedMatch: null, blocksOnUnrelated: true },
+      {
+        hints: groups.directLabels,
+        forcedMatch: contextualNameKey(groups.directLabels),
+        blocksOnUnrelated: true,
+      },
+      { hints: localLabels, forcedMatch: contextualNameKey(localLabels), blocksOnUnrelated: true },
+      { hints: groups.fieldsets, forcedMatch: null, blocksOnUnrelated: false },
+      { hints: groups.contexts, forcedMatch: null, blocksOnUnrelated: false },
+      {
+        hints: weakNearbyLabels,
+        forcedMatch: contextualNameKey(weakNearbyLabels),
+        blocksOnUnrelated: false,
+      },
+    ];
+    let primary = { hasEvidence: false, match: null, segment: null, score: 0 };
+    let fallback = null;
+    const blockingHints = evidenceTiers
+      .filter((tier) => tier.blocksOnUnrelated)
+      .flatMap((tier) => tier.hints);
+    for (const tier of evidenceTiers) {
+      const result = tier.forcedMatch
+        ? { hasEvidence: true, match: tier.forcedMatch, segment: null, score: 400 }
+        : classificationForHints(tier.hints, metadata);
+      if (!result.hasEvidence) continue;
+      if (!result.match) return null;
+      if (result.score >= 200) {
+        primary = result;
+        break;
+      }
+      if (!fallback) fallback = result;
     }
-    const primary = contextualNameKey
-      ? { hasEvidence: true, match: contextualNameKey }
-      : classificationForHints(primaryHints, metadata);
+    if (!primary.hasEvidence && fallback) primary = fallback;
+    if (!primary.hasEvidence && isExplicitEmailConfirmationMetadata(metadata, groups)) {
+      primary = { hasEvidence: true, match: 'email', segment: null };
+    }
     const allowsAddress = primary.hasEvidence && allowsAddressHint(primary.match);
-    if (primaryHints.some((hint) => isUnrelatedHint(hint, allowsAddress))) {
-      return null;
-    }
-    const componentHints = [...groups.fieldSpecific, ...groups.directLabels, ...groups.nearLabels];
+    const allowsAlternateAddress = primary.hasEvidence
+      && ADDRESS_PROFILE_KEYS.has(primary.match);
+    if (blockingHints.some((hint) => (
+      isUnrelatedHint(hint, allowsAddress, allowsAlternateAddress)
+    ))) return null;
+    const componentHints = [...groups.fieldSpecific, ...groups.directLabels, ...localLabels,
+      ...weakNearbyLabels];
     const hintedComponent = dateSegmentFromHints(componentHints);
     const isSelect = String(metadata && metadata.tagName || '').toLowerCase() === 'select';
     const definitionContextIsBirthDate = scoreHints(
@@ -335,7 +466,9 @@
       && metadata.definitionSelectSegments.join(',') === 'year,month,day'
       ? ['year', 'month', 'day'][metadata.definitionSelectIndex] || null
       : null;
-    const component = orderedBirthComponent
+    const component = primary.segment
+      ? { segment: primary.segment, conflict: false }
+      : orderedBirthComponent
       ? { segment: orderedBirthComponent, conflict: false }
       : hintedComponent;
     if (primary.hasEvidence) {
@@ -356,28 +489,6 @@
       return { profileKey: 'gender', segment: null };
     }
 
-    for (const tier of [groups.fieldsets, groups.contexts, groups.autocomplete]) {
-      const contextual = classificationForHints(tier, metadata);
-      const contextAllowsAddress = contextual.hasEvidence
-        && allowsAddressHint(contextual.match);
-      if (tier.some((hint) => isUnrelatedHint(hint, contextAllowsAddress))) {
-        continue;
-      }
-      if (contextual.hasEvidence) {
-        if (!contextual.match) return null;
-        if (DATE_PROFILE_KEYS.has(contextual.match) && component.conflict) return null;
-        if (MONTH_PROFILE_KEYS.has(contextual.match)
-          && component.segment === 'year'
-          && !isSelect) return null;
-        return {
-          profileKey: contextual.match,
-          segment: isSelect && DATE_PROFILE_KEYS.has(contextual.match)
-            ? component.segment
-            : contextual.segment || null,
-        };
-      }
-    }
-
     return null;
   }
 
@@ -389,9 +500,9 @@
   function kanaNameKeyForLocalHints(hints) {
     for (const hint of hints) {
       const compact = hint.replace(/\s/g, '');
-      if (/^(姓|せい|セイ|姓カナ|フリガナ姓|ふりがな姓)$/.test(compact)
+      if (/^(姓|せい|セイ|姓カナ|カナ姓|フリガナ姓|ふりがな姓|kanasei|seikana)$/.test(compact)
         || /(^| )(family name kana|surname kana)($| )/.test(hint)) return 'familyNameKana';
-      if (/^(名|めい|メイ|名カナ|フリガナ名|ふりがな名)$/.test(compact)
+      if (/^(名|めい|メイ|名カナ|カナ名|フリガナ名|ふりがな名|kanana|nakana)$/.test(compact)
         || /(^| )(given name kana|first name kana)($| )/.test(hint)) return 'givenNameKana';
     }
     return null;
@@ -400,8 +511,8 @@
   function kanjiNameKeyForLocalHints(hints) {
     for (const hint of hints) {
       const compact = hint.replace(/\s/g, '');
-      if (/^(姓|苗字|名字)$/.test(compact)) return 'familyName';
-      if (/^(名|下の名前)$/.test(compact)) return 'givenName';
+      if (/^(姓|苗字|名字|漢字姓|kanjisei|seikanji)$/.test(compact)) return 'familyName';
+      if (/^(名|下の名前|漢字名|kanjina|nakanji)$/.test(compact)) return 'givenName';
     }
     return null;
   }
@@ -417,6 +528,45 @@
 
   function elementTagName(element) {
     return String(element && element.tagName || '').toLowerCase();
+  }
+
+  function hasBooleanAttribute(element, name) {
+    if (!element) return false;
+    if (element[name] === true) return true;
+    if (typeof element.hasAttribute === 'function') return element.hasAttribute(name);
+    return typeof element.getAttribute === 'function' && element.getAttribute(name) !== null;
+  }
+
+  function computedStyleIsInactive(element, document) {
+    const view = document && document.defaultView;
+    const getComputedStyle = view && view.getComputedStyle;
+    if (typeof getComputedStyle !== 'function') return false;
+    const style = getComputedStyle.call(view, element);
+    const display = String(style && style.display || '').toLowerCase();
+    const visibility = String(style && style.visibility || '').toLowerCase();
+    return display === 'none' || visibility === 'hidden' || visibility === 'collapse';
+  }
+
+  function isInsideInactiveBranch(control, document) {
+    let ancestor = control && control.parentElement;
+    for (let depth = 0; ancestor && depth < 32; depth += 1, ancestor = ancestor.parentElement) {
+      if (hasBooleanAttribute(ancestor, 'hidden')
+        || hasBooleanAttribute(ancestor, 'inert')
+        || computedStyleIsInactive(ancestor, document)) return true;
+    }
+    return false;
+  }
+
+  function isControlActive(control, document) {
+    if (!control || isInsideInactiveBranch(control, document)
+      || hasBooleanAttribute(control, 'hidden')
+      || hasBooleanAttribute(control, 'inert')) return false;
+    const tagName = elementTagName(control);
+    const type = tagName === 'input'
+      ? String(control.getAttribute('type') || control.type || 'text').toLowerCase()
+      : '';
+    const styledNativeDataControl = tagName === 'select' || type === 'radio';
+    return styledNativeDataControl || !computedStyleIsInactive(control, document);
   }
 
   function getNearbyLabelTexts(control) {
@@ -530,8 +680,12 @@
 
   function addressContextHints(control, document, metadata) {
     const hints = [
+      ...(metadata && Array.isArray(metadata.labelTexts) ? metadata.labelTexts : []),
+      ...(metadata && Array.isArray(metadata.nearLabelTexts) ? metadata.nearLabelTexts : []),
       ...(metadata && Array.isArray(metadata.contextTexts) ? metadata.contextTexts : []),
       ...(metadata && Array.isArray(metadata.fieldsetTexts) ? metadata.fieldsetTexts : []),
+      ...[metadata && metadata.placeholder, metadata && metadata.name, metadata && metadata.id,
+        metadata && metadata.ariaLabel, metadata && metadata.autocomplete].filter(Boolean),
     ];
     let ancestor = control && control.parentElement;
     for (let depth = 0; ancestor && depth < 12; depth += 1, ancestor = ancestor.parentElement) {
@@ -562,10 +716,10 @@
   function addressSectionMarker(element) {
     if (!element || queryElements(element, 'input, select, textarea').length > 0) return null;
     const text = normalizeHint(element.textContent || '');
-    if (text === '現住所') {
+    if (['現住所', 'current address', 'residential address'].includes(text)) {
       return { kind: 'current' };
     }
-    if (text === '休暇中の連絡先') {
+    if (['休暇中の連絡先', '帰省先', 'home address', 'vacation address'].includes(text)) {
       return { kind: 'other' };
     }
     return null;
@@ -597,10 +751,48 @@
     return 'unmarked';
   }
 
-  function addressScopeSkipReason(control, document, metadata) {
-    if (addressContextHints(control, document, metadata).some((hint) => (
-      /休暇中|休暇連絡先|緊急連絡先|vacation|emergency|temporary address/.test(hint)
-    ))) return 'non-current-address-context';
+  function addressHintScope(hint) {
+    const current = /現住所|現在の?居住地|居住地/.test(hint)
+      || /(^| )(current address|current prefecture|residential address|residence|residential area)($| )/.test(hint);
+    const other = /休暇中|休暇連絡先|緊急連絡先|帰省先|実家|出身地/.test(hint)
+      || /(^| )(home address|home prefecture|home town|vacation|emergency|temporary address)($| )/.test(hint);
+    if (current && other) return 'ambiguous';
+    return current ? 'current' : other ? 'other' : 'unmarked';
+  }
+
+  function explicitAddressScope(control, document, metadata) {
+    const scopes = new Set(addressContextHints(control, document, metadata)
+      .map(addressHintScope).filter((scope) => scope !== 'unmarked'));
+    if (scopes.has('ambiguous') || scopes.size > 1) return 'ambiguous';
+    return scopes.size === 1 ? [...scopes][0] : 'unmarked';
+  }
+
+  function hasStrongCurrentPrefectureEvidence(metadata) {
+    const groups = metadataHintGroups(metadata);
+    const localLabels = groups.nearLabels.length === 1 ? groups.nearLabels : [];
+    return [groups.autocomplete, groups.fieldSpecific, groups.directLabels, localLabels]
+      .some((hints) => {
+        const evidence = classificationForHints(hints, metadata);
+        return evidence.match === 'currentPrefecture' && evidence.score >= 200;
+      });
+  }
+
+  function adjustAddressClassificationForScope(classification, control, document, metadata) {
+    if (classification?.profileKey === 'currentPrefecture'
+      && explicitAddressScope(control, document, metadata) === 'other'
+      && !hasStrongCurrentPrefectureEvidence(metadata)) {
+      return { profileKey: 'homePrefecture', segment: null };
+    }
+    return classification;
+  }
+
+  function addressScopeSkipReason(control, document, metadata, profileKey = 'currentAddress') {
+    const explicitScope = explicitAddressScope(control, document, metadata);
+    if (explicitScope === 'ambiguous') return 'ambiguous-address-context';
+    if (profileKey === 'homePrefecture') {
+      return explicitScope === 'other' ? null : 'home-address-context-not-proven';
+    }
+    if (explicitScope === 'other') return 'non-current-address-context';
     const rangeStatus = addressSiblingRangeStatus(control);
     if (rangeStatus === 'ambiguous') return 'ambiguous-section-boundary';
     if (rangeStatus === 'outside') return 'outside-current-address-range';
@@ -656,6 +848,40 @@
     return String(cell.previousElementSibling.textContent || '').trim();
   }
 
+  function getStructuredRowHeading(control) {
+    const broadTags = new Set(['form', 'section', 'article', 'fieldset', 'body', 'html']);
+    const rowTags = new Set(['div', 'li']);
+    const headingTags = new Set(['div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+    let ancestor = control && control.parentElement;
+    for (let depth = 0; ancestor && depth < 6; depth += 1, ancestor = ancestor.parentElement) {
+      if (broadTags.has(elementTagName(ancestor))) break;
+      if (!rowTags.has(elementTagName(ancestor))) continue;
+      const children = Array.from(ancestor.children || []);
+      if (children.length < 2 || children.length > 6) continue;
+      const controlBranches = children.filter((child) => (
+        child === control || queryElements(child, 'input, select, textarea').includes(control)
+      ));
+      if (controlBranches.length !== 1) continue;
+      const inputBranch = controlBranches[0];
+      const rowControls = queryElements(ancestor, 'input, select, textarea');
+      const branchControls = inputBranch === control
+        ? [control]
+        : queryElements(inputBranch, 'input, select, textarea');
+      if (!rowControls.length || rowControls.length > 6
+        || rowControls.length !== branchControls.length
+        || !rowControls.every((item) => branchControls.includes(item))) continue;
+      const headings = children.filter((child) => child !== inputBranch).filter((child) => {
+        if (!headingTags.has(elementTagName(child))) return false;
+        if (queryElements(child, 'input, select, textarea').length) return false;
+        const text = String(child.textContent || '').replace(/\s+/g, ' ').trim();
+        return text.length > 0 && text.length <= 80;
+      });
+      if (headings.length !== 1) continue;
+      return String(headings[0].textContent || '').replace(/\s+/g, ' ').trim();
+    }
+    return '';
+  }
+
   function collectFieldMetadata(control, document) {
     const labelTexts = [];
     const nearLabelTexts = [];
@@ -696,6 +922,10 @@
     const definitionHeading = definitionInfo?.heading || '';
     if (definitionHeading && !contextTexts.includes(definitionHeading)) {
       contextTexts.push(definitionHeading);
+    }
+    const structuredRowHeading = getStructuredRowHeading(control);
+    if (structuredRowHeading && !contextTexts.includes(structuredRowHeading)) {
+      contextTexts.push(structuredRowHeading);
     }
 
     const fieldset = control.closest('fieldset');
@@ -901,6 +1131,10 @@
 
   function valueForControl(profileKey, profileValue, segment, control) {
     if (!segment) {
+      if (profileKey === 'currentPostalCode') {
+        const digits = postalCodeDigits(profileValue);
+        return digits ? `${digits.slice(0, 3)}-${digits.slice(3)}` : '';
+      }
       if (profileKey === 'researchKeywords' && Array.isArray(profileValue)) {
         const tagName = String(control.tagName || '').toLowerCase();
         return profileValue.map((value) => String(value).trim()).filter(Boolean)
@@ -915,12 +1149,27 @@
     return components ? components[segment] : '';
   }
 
+  function combinedCurrentAddressValue(profile) {
+    const city = typeof profile?.currentCity === 'string' ? profile.currentCity.trim() : '';
+    const street = typeof profile?.currentStreet === 'string' ? profile.currentStreet.trim() : '';
+    if (city || street) return `${city}${street}`;
+    return typeof profile?.currentAddress === 'string' ? profile.currentAddress.trim() : '';
+  }
+
+  function postalCodeDigits(value) {
+    if (typeof value !== 'string') return '';
+    const normalized = value.normalize('NFKC').trim();
+    if (/^\d{7}$/.test(normalized)) return normalized;
+    return /^\d{3}-\d{4}$/.test(normalized) ? normalized.replace('-', '') : '';
+  }
+
   function setFormControlValue(control, classification, value, document) {
     const tagName = String(control.tagName || '').toLowerCase();
+    let selectedOption = null;
     if (tagName === 'select') {
-      const option = findMatchingOption(control, value, classification.segment);
-      if (!option) return false;
-      const index = Array.prototype.indexOf.call(control.options, option);
+      selectedOption = findMatchingOption(control, value, classification.segment);
+      if (!selectedOption) return false;
+      const index = Array.prototype.indexOf.call(control.options, selectedOption);
       if (index < 0) return false;
       setNativeProperty(control, 'selectedIndex', index, document);
     } else {
@@ -944,8 +1193,13 @@
     }
 
     dispatchValueEvents(control, document);
-    if (tagName === 'select') syncJqTransformSelectView(control);
-    return true;
+    if (tagName === 'select') {
+      const currentOption = Array.from(control.options || [])[control.selectedIndex];
+      if (!currentOption || !optionMatchesSegment(currentOption, value, classification.segment)) return false;
+      syncJqTransformSelectView(control);
+      return true;
+    }
+    return String(control.value) === String(value);
   }
 
   function readSpinbuttonValue(control) {
@@ -1026,6 +1280,10 @@
         || group.disabled
         || group.readOnly
         || (fieldset && fieldset.disabled)
+        || isInsideInactiveBranch(group, document)
+        || hasBooleanAttribute(group, 'hidden')
+        || hasBooleanAttribute(group, 'inert')
+        || computedStyleIsInactive(group, document)
         || (onlyControls && !onlyControls.has(group))) continue;
       const classification = classifyControl(collectFieldMetadata(group, document));
       if (!classification || !MONTH_PROFILE_KEYS.has(classification.profileKey)) continue;
@@ -1106,7 +1364,8 @@
     const radios = Array.from(document.querySelectorAll('input, select, textarea'))
       .filter((control) => String(control.tagName).toLowerCase() === 'input'
         && String(control.getAttribute('type') || control.type || '').toLowerCase() === 'radio'
-        && (control.getAttribute('name') || control.name));
+        && (control.getAttribute('name') || control.name)
+        && isControlActive(control, document));
     const groups = [];
     for (const radio of radios) {
       const name = radio.getAttribute('name') || radio.name;
@@ -1145,6 +1404,7 @@
       try {
         setNativeProperty(control, 'checked', true, document);
         dispatchValueEvents(control, document);
+        if (control.checked !== true) continue;
         changed.add(control);
         filledCount += 1;
       } catch (_error) {
@@ -1157,6 +1417,44 @@
   function confirmationHint(value) {
     const hint = normalizeHint(value).replace(/\s/g, '');
     return /確認|再入力|もう一度|confirm|reenter|re-enter/.test(hint);
+  }
+
+  function emailMetadataHints(metadata, groups = metadataHintGroups(metadata)) {
+    return [
+      ...groups.fieldSpecific,
+      ...groups.directLabels,
+      ...groups.nearLabels,
+      ...groups.fieldsets,
+      ...groups.contexts,
+    ];
+  }
+
+  function isExplicitEmailConfirmationMetadata(metadata, groups = metadataHintGroups(metadata)) {
+    const hints = emailMetadataHints(metadata, groups);
+    if (!hints.some(confirmationHint)) return false;
+    const inputType = String(metadata && metadata.inputType || '').toLowerCase();
+    const hasEmailIdentity = groups.autocomplete.includes('email')
+      || groups.fieldSpecific.some((hint) => /メールアドレス|e mail|email|mail/.test(hint));
+    return inputType === 'email' || hasEmailIdentity;
+  }
+
+  function isNumberedEmailMetadata(metadata) {
+    if (isExplicitEmailConfirmationMetadata(metadata)) return false;
+    return emailMetadataHints(metadata).some((hint) => {
+      const compact = hint.replace(/\s/g, '');
+      return /(?:メールアドレス|email|emailaddress|mail)[2-9]\d*$/.test(compact);
+    });
+  }
+
+  function emailScope(control, document) {
+    if (control && control.form) return control.form;
+    let ancestor = control && control.parentElement;
+    for (let depth = 0; ancestor && depth < 16; depth += 1, ancestor = ancestor.parentElement) {
+      if (elementTagName(ancestor) === 'form'
+        || elementTagName(ancestor) === 'fieldset'
+        || ancestor.getAttribute?.('role') === 'group') return ancestor;
+    }
+    return document;
   }
 
   function compactEducationText(value) {
@@ -1351,7 +1649,8 @@
   }
 
   function fillEducationSections(document, profile, options = {}) {
-    const controls = Array.from(document.querySelectorAll('input, select, textarea'));
+    const controls = Array.from(document.querySelectorAll('input, select, textarea'))
+      .filter((control) => isControlActive(control, document));
     const reserved = new Set();
     const records = new Map();
     const finalLevel = String(profile && profile.finalEducation && profile.finalEducation.level || '');
@@ -1373,6 +1672,7 @@
     const result = { filledCount: 0, failedCount: 0, controls: reserved };
     const setValue = (control, key, value, segment = null) => {
       if (control.disabled || control.readOnly
+        || !isControlActive(control, document)
         || (typeof control.matches === 'function' && control.matches(':disabled'))) return;
       try {
         const success = setFormControlValue(control, { profileKey: key, segment }, value, document);
@@ -1631,6 +1931,15 @@
     return '';
   }
 
+  function contactGroupKey(label, controls, document) {
+    const labelledKey = label ? classifyField({ labelTexts: [label] }) : null;
+    if (['email', 'phoneNumber', 'mobilePhone'].includes(labelledKey)) return labelledKey;
+    const phoneKeys = new Set(controls.map((control) => (
+      classifyControl(collectFieldMetadata(control, document))?.profileKey
+    )).filter((key) => ['phoneNumber', 'mobilePhone'].includes(key)));
+    return phoneKeys.size === 1 ? [...phoneKeys][0] : null;
+  }
+
   function fillSplitPostalGroups(document, profile, options = {}) {
     const skipProfileKeys = new Set(options.skipProfileKeys || []);
     const onlyProfileKeys = options.onlyProfileKeys ? new Set(options.onlyProfileKeys) : null;
@@ -1643,16 +1952,24 @@
     for (const control of document.querySelectorAll('input, select, textarea')) {
       if (elementTagName(control) !== 'input') continue;
       const type = String(control.getAttribute('type') || control.type || 'text').toLowerCase();
-      if (!['text', 'tel'].includes(type)) continue;
+      if (!['text', 'tel'].includes(type) || !isControlActive(control, document)) continue;
       const groups = [...ancestorContainers(control)];
       const definition = getPairedDefinition(control);
       if (definition && !groups.includes(definition)) groups.push(definition);
       for (const group of groups) {
         const controls = groupControls(group).filter((item) => (
           ['text', 'tel'].includes(String(item.getAttribute('type') || item.type || 'text').toLowerCase())
+          && isControlActive(item, document)
         ));
         if (controls.length !== 2) continue;
         let label = contactGroupLabel(group, controls, document);
+        if (!/郵便番号|postal code|postcode|zip code/i.test(label)) {
+          const rowHeadings = controls.map((item) => getStructuredRowHeading(item));
+          if (rowHeadings[0]
+            && rowHeadings.every((heading) => heading === rowHeadings[0])) {
+            label = rowHeadings[0];
+          }
+        }
         if (!/郵便番号|postal code|postcode|zip code/i.test(label)) {
           const definitions = controls.map((item) => getPairedDefinition(item));
           const sharedDefinition = definitions[0]
@@ -1661,7 +1978,7 @@
         }
         if (!/郵便番号|postal code|postcode|zip code/i.test(label)) continue;
         const excludedReasons = controls.map((item) => addressScopeSkipReason(
-          item, document, collectFieldMetadata(item, document),
+          item, document, collectFieldMetadata(item, document), 'currentPostalCode',
         )).filter(Boolean);
         if (excludedReasons.length) continue;
         if (!candidates.some((candidate) => sameControls(candidate.controls, controls))) {
@@ -1688,10 +2005,11 @@
         || (skipControls && groupControlsList.some((control) => skipControls.has(control)))) continue;
       const rawValue = profile && profile.currentPostalCode;
       if (typeof rawValue !== 'string' || !rawValue.trim()) continue;
-      const postal = rawValue.normalize('NFKC').replace(/[\s-]/g, '');
-      if (!/^\d{7}$/.test(postal)) continue;
+      const postal = postalCodeDigits(rawValue);
+      if (!postal) continue;
       for (const [index, control] of groupControlsList.entries()) {
         if (control.disabled || control.readOnly
+          || !isControlActive(control, document)
           || (typeof control.matches === 'function' && control.matches(':disabled'))) break;
         try {
           if (!setFormControlValue(control, { profileKey: 'currentPostalCode', segment: index === 0 ? 'first3' : 'last4' },
@@ -1725,17 +2043,20 @@
 
     for (const control of document.querySelectorAll('input, select, textarea')) {
       if (String(control.tagName || '').toLowerCase() !== 'input'
-        || !['text', 'tel', 'email'].includes(String(control.getAttribute('type') || control.type || 'text').toLowerCase())) continue;
+        || !['text', 'tel', 'email'].includes(String(control.getAttribute('type') || control.type || 'text').toLowerCase())
+        || !isControlActive(control, document)) continue;
       const definitionGroup = getPairedDefinition(control);
       const groups = [...ancestorContainers(control)];
       if (definitionGroup && !groups.includes(definitionGroup)) groups.push(definitionGroup);
       for (const group of groups) {
-        const controls = groupControls(group);
+        const controls = groupControls(group).filter((item) => (
+          ['text', 'tel', 'email'].includes(
+            String(item.getAttribute('type') || item.type || 'text').toLowerCase(),
+          ) && isControlActive(item, document)
+        ));
         const label = contactGroupLabel(group, controls, document);
-        if (!label || controls.some((item) => !['text', 'tel', 'email'].includes(
-          String(item.getAttribute('type') || item.type || 'text').toLowerCase(),
-        ))) continue;
-        const key = classifyField({ labelTexts: [label] });
+        const key = contactGroupKey(label, controls, document);
+        if (!key) continue;
         const emailSeparatorCount = (String(group.textContent || '').normalize('NFKC').match(/@/g) || []).length;
         const emailGroup = key === 'email'
           && ((controls.length === 2 && emailSeparatorCount === 1)
@@ -1744,7 +2065,10 @@
           // The separator can be generated by CSS or rendered outside textContent.
           // Three inputs under one uniquely identified phone group are enough to
           // treat them as a single segmented control; never fill them individually.
-          && controls.length === 3;
+          && controls.length === 3
+          && controls.every((item) => ['text', 'tel'].includes(
+            String(item.getAttribute('type') || item.type || 'text').toLowerCase(),
+          ));
         if ((!emailGroup && !phoneGroup)
           || controls.some((item) => considered.has(item))
           || candidates.some((candidate) => candidate.group === group
@@ -1796,6 +2120,7 @@
         for (let index = 0; index < controls.length; index += 1) {
           const item = controls[index];
           if (item.disabled || item.readOnly
+            || !isControlActive(item, document)
             || (typeof item.matches === 'function' && item.matches(':disabled'))) {
             break;
           }
@@ -1832,31 +2157,44 @@
       .filter((control) => String(control.tagName || '').toLowerCase() === 'input'
         && ['text', 'email'].includes(String(control.getAttribute('type') || control.type || 'text').toLowerCase())
         && !control.disabled && !control.readOnly
+        && isControlActive(control, document)
+        && !contactResult.controls.has(control)
         && !(typeof control.matches === 'function' && control.matches(':disabled')))
-      .map((control) => ({ control, metadata: collectFieldMetadata(control, document) }))
-      .filter((entry) => classifyControl(entry.metadata)?.profileKey === 'email');
-    const unconfirmedEmailEntries = emailEntries.filter((entry) => !confirmationHint(
-      [...entry.metadata.labelTexts, ...entry.metadata.nearLabelTexts].join(' '),
+      .map((control) => {
+        const metadata = collectFieldMetadata(control, document);
+        return { control, metadata, classification: classifyControl(metadata) };
+      })
+      .filter((entry) => entry.classification?.profileKey === 'email');
+    const primaryEmailEntries = emailEntries.filter((entry) => (
+      !isExplicitEmailConfirmationMetadata(entry.metadata)
+      && !isNumberedEmailMetadata(entry.metadata)
     ));
-    const confirmedEmailEntries = emailEntries.filter((entry) => confirmationHint(
-      [...entry.metadata.labelTexts, ...entry.metadata.nearLabelTexts].join(' '),
+    const confirmedEmailEntries = emailEntries.filter((entry) => (
+      isExplicitEmailConfirmationMetadata(entry.metadata)
     ));
     const allowedEmailControls = new Set();
-    if (unconfirmedEmailEntries.length === 1) {
-      allowedEmailControls.add(unconfirmedEmailEntries[0].control);
-      if (confirmedEmailEntries.length === 1) {
-        allowedEmailControls.add(confirmedEmailEntries[0].control);
+    if (primaryEmailEntries.length === 1) {
+      const primary = primaryEmailEntries[0].control;
+      allowedEmailControls.add(primary);
+      const relatedConfirmations = confirmedEmailEntries.filter((entry) => (
+        emailScope(entry.control, document) === emailScope(primary, document)
+      ));
+      if (relatedConfirmations.length === 1) {
+        allowedEmailControls.add(relatedConfirmations[0].control);
       }
     }
 
     const addressMatchCounts = new Map();
     for (const control of document.querySelectorAll('input, select, textarea')) {
+      if (!isControlActive(control, document)) continue;
       const metadata = collectFieldMetadata(control, document);
-      const classification = classifyControl(metadata);
-      if (!classification || ![
-        'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
-      ].includes(classification.profileKey)) continue;
-      const scopeSkipReason = addressScopeSkipReason(control, document, metadata);
+      const classification = adjustAddressClassificationForScope(
+        classifyControl(metadata), control, document, metadata,
+      );
+      if (!classification || !ADDRESS_PROFILE_KEYS.has(classification.profileKey)) continue;
+      const scopeSkipReason = addressScopeSkipReason(
+        control, document, metadata, classification.profileKey,
+      );
       if (!isFillableAddressControl(control)
         || scopeSkipReason) continue;
       addressMatchCounts.set(
@@ -1878,25 +2216,28 @@
         || (tagName === 'input' && ['text', 'date', 'month', 'email', 'tel'].includes(type));
       const effectivelyDisabled = typeof control.matches === 'function'
         && control.matches(':disabled');
-      if (!supported || control.disabled || effectivelyDisabled || control.readOnly) continue;
+      if (!supported || control.disabled || effectivelyDisabled || control.readOnly
+        || !isControlActive(control, document)) continue;
 
       try {
         const metadata = collectFieldMetadata(control, document);
         if (metadata.role === 'combobox' || metadata.role === 'spinbutton') continue;
-        const classification = classifyControl(metadata);
+        const classification = adjustAddressClassificationForScope(
+          classifyControl(metadata), control, document, metadata,
+        );
         if (!classification) continue;
         if (classification.profileKey === 'email' && !allowedEmailControls.has(control)) continue;
         if (skipProfileKeys.has(classification.profileKey)
           || (onlyProfileKeys && !onlyProfileKeys.has(classification.profileKey))) continue;
-        if ([
-          'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
-        ].includes(classification.profileKey)
-          && addressScopeSkipReason(control, document, metadata)) continue;
-        if ([
-          'currentPostalCode', 'currentPrefecture', 'currentAddress', 'currentBuilding',
-        ].includes(classification.profileKey)
+        if (ADDRESS_PROFILE_KEYS.has(classification.profileKey)
+          && addressScopeSkipReason(
+            control, document, metadata, classification.profileKey,
+          )) continue;
+        if (ADDRESS_PROFILE_KEYS.has(classification.profileKey)
           && addressMatchCounts.get(classification.profileKey) !== 1) continue;
-        const storedValue = profile && profile[classification.profileKey];
+        const storedValue = classification.profileKey === 'currentAddress'
+          ? combinedCurrentAddressValue(profile)
+          : profile && profile[classification.profileKey];
         const value = valueForControl(
           classification.profileKey,
           storedValue,
@@ -2047,7 +2388,8 @@
 
   function controlsForProfileKey(document, profileKey) {
     return Array.from(document.querySelectorAll('input, select, textarea'))
-      .filter((control) => classifyControl(collectFieldMetadata(control, document))?.profileKey === profileKey);
+      .filter((control) => isControlActive(control, document)
+        && classifyControl(collectFieldMetadata(control, document))?.profileKey === profileKey);
   }
 
   function relatedToSchoolControl(control, schoolControls) {

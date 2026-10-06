@@ -48,7 +48,11 @@ test('popup contains all profile fields, sections, actions, status region, and o
     'email',
     'birthDate',
     'gender',
+    'currentPostalCode',
     'currentPrefecture',
+    'currentCity',
+    'currentStreet',
+    'currentBuilding',
     'homePrefecture',
     'academicCourse',
     'grade',
@@ -95,6 +99,7 @@ test('popup contains all profile fields, sections, actions, status region, and o
   assert.match(popup, /<select[^>]+id=["']gender["']/);
   assert.match(popup, /<select[^>]+id=["']currentPrefecture["']/);
   assert.match(popup, /<select[^>]+id=["']homePrefecture["']/);
+  assert.doesNotMatch(popup, /id=["']currentAddress["']/);
   assert.match(popup, /<option[^>]+value=["']秋田県["'][^>]*>秋田県<\/option>/);
   assert.match(popup, /<option[^>]+value=["']海外["'][^>]*>海外<\/option>/);
   for (const section of ['基本情報', '所在地', '学校情報', '学歴情報', '中学校', '高等学校', '大学（学士）', '大学院（修士）', '最終学歴', '研究情報']) {

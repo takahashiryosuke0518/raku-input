@@ -73,13 +73,7 @@
         <label for="currentPostalCode">郵便番号</label>
         <input id="currentPostalCode" name="currentPostalCode" type="text" inputmode="numeric" autocomplete="postal-code">
 
-        <label for="currentAddress">市区郡・地名・番地</label>
-        <input id="currentAddress" name="currentAddress" type="text" autocomplete="address-line1">
-
-        <label for="currentBuilding">建物名・部屋番号</label>
-        <input id="currentBuilding" name="currentBuilding" type="text" autocomplete="address-line2">
-
-        <label for="currentPrefecture">居住地</label>
+        <label for="currentPrefecture">都道府県</label>
         <select id="currentPrefecture" name="currentPrefecture">
           <option value="">未設定</option>
           <option value="北海道">北海道</option>
@@ -131,6 +125,15 @@
           <option value="沖縄県">沖縄県</option>
           <option value="海外">海外</option>
         </select>
+
+        <label for="currentCity">市区郡町村</label>
+        <input id="currentCity" name="currentCity" type="text" autocomplete="address-level2">
+
+        <label for="currentStreet">町域・番地</label>
+        <input id="currentStreet" name="currentStreet" type="text" autocomplete="address-line1">
+
+        <label for="currentBuilding">建物名・部屋番号</label>
+        <input id="currentBuilding" name="currentBuilding" type="text" autocomplete="address-line2">
 
         <label for="homePrefecture">帰省先</label>
         <select id="homePrefecture" name="homePrefecture">

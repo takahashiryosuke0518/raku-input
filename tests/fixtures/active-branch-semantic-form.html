@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ja">
+<body>
+  <form>
+    <section aria-label="氏名">
+      <label for="kanji-family">漢字姓</label>
+      <input id="kanji-family" name="kanji_sei" placeholder="漢字姓">
+      <label for="kanji-given">漢字名</label>
+      <input id="kanji-given" name="kanji_na" placeholder="漢字名">
+      <label for="kana-family">カナ姓</label>
+      <input id="kana-family" name="kana_sei" placeholder="カナ姓">
+      <label for="kana-given">カナ名</label>
+      <input id="kana-given" name="kana_na" placeholder="カナ名">
+      <label for="latin-family">ローマ字姓</label>
+      <input id="latin-family" name="roma_sei" placeholder="ローマ字姓">
+      <label for="latin-given">ローマ字名</label>
+      <input id="latin-given" name="roma_na" placeholder="ローマ字名">
+    </section>
+
+    <section aria-label="生年月日">
+      <select name="birth_Y"><option>2002</option></select><span>年</span>
+      <select name="birth_m"><option>5</option></select><span>月</span>
+      <select name="birth_d"><option>05</option></select><span>日</span>
+    </section>
+
+    <section aria-label="携帯電話番号">
+      <input type="tel" aria-label="携帯電話識別番号">
+      <input type="tel" aria-label="事業者識別番号">
+      <input type="tel" aria-label="加入者番号">
+    </section>
+
+    <section aria-label="連絡先（海外）" style="display: none">
+      <input type="text" aria-label="郵便番号">
+      <input type="tel" aria-label="電話番号">
+      <input type="tel" aria-label="携帯電話番号">
+    </section>
+
+    <label for="school">学校名</label>
+    <input id="school" name="school_name">
+    <label for="school-initial">学校名の頭文字</label>
+    <input id="school-initial" name="initial">
+
+    <label for="email">メールアドレス</label>
+    <input id="email" name="email" type="email" placeholder="メールアドレス">
+    <label for="email-confirm">確認用</label>
+    <input id="email-confirm" name="email2" type="email" placeholder="確認用">
+    <label for="email-other">メールアドレス2</label>
+    <input id="email-other" name="secondary_email" type="email">
+  </form>
+</body>
+</html>

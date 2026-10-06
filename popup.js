@@ -76,7 +76,8 @@
     'phoneNumber',
     'mobilePhone',
     'currentPostalCode',
-    'currentAddress',
+    'currentCity',
+    'currentStreet',
     'currentBuilding',
     'email',
     'birthDate',
@@ -124,6 +125,8 @@
         .map((key) => [key, document.getElementById(key)]),
     );
     const status = document.getElementById('status');
+    let preservedCurrentAddress = '';
+    let profileLoaded = false;
 
     function setStatus(message, kind = 'info') {
       status.textContent = message;
@@ -137,6 +140,7 @@
           ? fields[key].value.split(/[\n,、]/).map((value) => value.trim()).filter(Boolean)
           : fields[key].value,
       ]));
+      profile.currentAddress = preservedCurrentAddress;
       profile.educationHistory = {};
       profile.finalEducation = {};
       for (const [id, section, stage, key] of EDUCATION_FIELD_BINDINGS) {
@@ -149,6 +153,9 @@
     }
 
     function writeForm(profile) {
+      preservedCurrentAddress = typeof profile.currentAddress === 'string'
+        ? profile.currentAddress : '';
+      profileLoaded = true;
       for (const key of PROFILE_KEYS) {
         fields[key].value = key === 'researchKeywords'
           ? (Array.isArray(profile[key]) ? profile[key].join('\n') : '')
@@ -166,7 +173,11 @@
 
     async function loadProfile() {
       try {
-        return await storageApi.load();
+        const profile = await storageApi.load();
+        preservedCurrentAddress = typeof profile.currentAddress === 'string'
+          ? profile.currentAddress : '';
+        profileLoaded = true;
+        return profile;
       } catch (_error) {
         setStatus('プロフィールを読み込めませんでした。', 'error');
         return null;
@@ -185,6 +196,7 @@
 
     async function saveProfile() {
       try {
+        if (!profileLoaded && !await loadProfile()) return;
         const profile = await storageApi.save(readForm());
         writeForm(profile);
         setStatus('保存しました。', 'success');
@@ -259,7 +271,7 @@
 
       const hasLegacyData = PROFILE_KEYS.some((key) => (
         Array.isArray(profile[key]) ? profile[key].length > 0 : Boolean(profile[key])
-      ));
+      )) || Boolean(profile.currentAddress);
       const hasEducationData = EDUCATION_FIELD_BINDINGS.some(([id, section, stage, key]) => {
         const value = section === 'educationHistory'
           ? profile.educationHistory && profile.educationHistory[stage]

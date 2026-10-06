@@ -22,6 +22,8 @@ const EMPTY_PROFILE = {
   phoneNumber: '',
   mobilePhone: '',
   currentPostalCode: '',
+  currentCity: '',
+  currentStreet: '',
   currentAddress: '',
   currentBuilding: '',
   email: '',
@@ -121,6 +123,8 @@ test('normalizeProfile keeps all profile fields, trims strings, and normalizes k
       phoneNumber: '000-0000-0000',
       mobilePhone: '000-0000-0000',
       currentPostalCode: '',
+      currentCity: '',
+      currentStreet: '',
       currentAddress: '',
       currentBuilding: '',
       email: 'example@example.com',
@@ -165,6 +169,8 @@ test('normalizeProfile keeps all profile fields, trims strings, and normalizes k
     'phoneNumber',
     'mobilePhone',
     'currentPostalCode',
+    'currentCity',
+    'currentStreet',
     'currentAddress',
     'currentBuilding',
     'email',
@@ -196,14 +202,31 @@ test('load returns an empty normalized profile when nothing is stored', async ()
 test('normalizeProfile stores current postal code and address components', () => {
   assert.deepEqual(normalizeProfile({
     currentPostalCode: ' 1234567 ',
+    currentCity: ' 千代田区 ',
+    currentStreet: ' 千代田1-1 ',
     currentAddress: ' 東京都千代田区千代田1-1 ',
     currentBuilding: ' ○○マンション101 ',
   }), {
     ...EMPTY_PROFILE,
-    currentPostalCode: '1234567',
+    currentPostalCode: '123-4567',
+    currentCity: '千代田区',
+    currentStreet: '千代田1-1',
     currentAddress: '東京都千代田区千代田1-1',
     currentBuilding: '○○マンション101',
   });
+});
+
+test('normalizeProfile canonicalizes only valid seven-digit postal codes', () => {
+  for (const [source, expected] of [
+    ['0123456', '012-3456'],
+    ['012-3456', '012-3456'],
+    ['０１２３４５６', '012-3456'],
+    ['012345', '012345'],
+    ['012-34567', '012-34567'],
+    ['012 3456', '012 3456'],
+  ]) {
+    assert.equal(normalizeProfile({ currentPostalCode: source }).currentPostalCode, expected);
+  }
 });
 
 test('final education dates prefer its matching history record and only use matching legacy school data as fallback', () => {
@@ -328,6 +351,8 @@ test('save stores one normalized profile object and returns it', async () => {
     phoneNumber: '000-0000-0000',
     mobilePhone: '000-0000-0000',
     currentPostalCode: '',
+    currentCity: '',
+    currentStreet: '',
     currentAddress: '',
     currentBuilding: '',
     email: 'example@example.com',
@@ -408,7 +433,33 @@ test('old saved profiles export with missing fields normalized to the current sc
   assert.deepEqual(exported.profile.educationHistory, EMPTY_PROFILE.educationHistory);
   assert.deepEqual(exported.profile.finalEducation, EMPTY_PROFILE.finalEducation);
   assert.equal(Object.hasOwn(exported.profile, 'currentPostalCode'), true);
+  assert.equal(Object.hasOwn(exported.profile, 'currentCity'), true);
+  assert.equal(Object.hasOwn(exported.profile, 'currentStreet'), true);
   assert.equal(Object.hasOwn(exported.profile, 'researchOverview'), true);
+});
+
+test('profile import accepts the exact legacy schema and adds empty split address fields', () => {
+  const legacyProfile = structuredClone(EMPTY_PROFILE);
+  delete legacyProfile.currentCity;
+  delete legacyProfile.currentStreet;
+  legacyProfile.currentPostalCode = '0123456';
+  legacyProfile.currentPrefecture = '秋田県';
+  legacyProfile.currentAddress = '秋田市山王1-1';
+  legacyProfile.currentBuilding = '県庁マンション101';
+
+  const imported = parseProfileImportJson(JSON.stringify({
+    format: PROFILE_EXPORT_FORMAT,
+    version: PROFILE_EXPORT_VERSION,
+    profile: legacyProfile,
+  }));
+
+  assert.deepEqual(imported, {
+    ...EMPTY_PROFILE,
+    currentPostalCode: '012-3456',
+    currentPrefecture: '秋田県',
+    currentAddress: '秋田市山王1-1',
+    currentBuilding: '県庁マンション101',
+  });
 });
 
 test('profile import rejects invalid JSON, unsupported versions, shapes, and field types', () => {
